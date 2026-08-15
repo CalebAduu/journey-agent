@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import Enum
 
 
@@ -17,10 +18,20 @@ class SourceStatus(Enum):
 
 
 @dataclass(frozen=True)
+class Leg:
+    origin: str
+    destination: str
+
+
+@dataclass(frozen=True)
 class Observation:
     source: str
     mode: str
     status: SourceStatus
+    price: Money | None = None
+    duration: timedelta | None = None
+    observed_at: datetime | None = None
+    detail: str = ""
 
 
 class LegStatus:

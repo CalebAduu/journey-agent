@@ -3,7 +3,9 @@ name = "journey-agent"
 version = "0.1.0"
 description = "An agent that reasons honestly about what it does not know when planning a multi-leg journey."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "pyyaml>=6.0",
+]
 
 [project.optional-dependencies]
 dev = [

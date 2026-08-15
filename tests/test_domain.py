@@ -6,6 +6,8 @@ empty-but-successful response. Write this test first — it is the thesis
 statement of the project."
 """
 
+from datetime import UTC, datetime, timedelta
+
 from journey.domain import (
     Conflicted,
     Empty,
@@ -65,3 +67,23 @@ def test_conflicted_carries_both_values_not_one():
     assert conflicted != Unknown(observations=())
     assert conflicted != Empty(observations=())
     assert conflicted != NotApplicable(reason="no direct passenger service")
+
+
+def test_observation_carries_price_duration_and_provenance():
+    """Phase 2a: a stub source's successful answer needs to report a price,
+    a duration, when it was observed, and (on failure) why."""
+    observed_at = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+
+    observation = Observation(
+        source="stub-flight",
+        mode="flight",
+        status=SourceStatus.FRESH,
+        price=Money(15000, "GBP"),
+        duration=timedelta(hours=1, minutes=30),
+        observed_at=observed_at,
+        detail="",
+    )
+
+    assert observation.price == Money(15000, "GBP")
+    assert observation.duration == timedelta(hours=1, minutes=30)
+    assert observation.observed_at == observed_at
