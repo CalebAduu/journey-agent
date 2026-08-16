@@ -196,6 +196,7 @@ def _print_strategies(console: Console, decision) -> None:
 
     for i, s in enumerate(decision.ranked_strategies):
         marker = "[bold green]*[/bold green]" if i == 0 else ""
+        kind_label = f"wait {s.wait_seconds:.0f}s" if s.kind is StrategyKind.WAIT and s.wait_seconds is not None else s.kind.value
         cost = f"{s.cost_score:.2f}" if s.cost_score is not None else "—"
         time_ = f"{s.time_score:.2f}" if s.time_score is not None else "—"
         certainty = f"{s.certainty_score:.2f}" if s.certainty_score is not None else "—"
@@ -203,10 +204,14 @@ def _print_strategies(console: Console, decision) -> None:
         voi = "—"
         reason = s.reason
         if s.kind is StrategyKind.WAIT and s.voi_value is not None:
-            voi = f"{s.voi_value:.4f} (p={s.voi_p:.2f} q={s.voi_q:.2f} delta={s.voi_delta:.4f})"
+            # delta is meaningless once q has already zeroed the whole
+            # product out - showing it next to q=0.00 reads as broken
+            # arithmetic rather than "this branch never looks at it."
+            delta = "—" if s.voi_q == 0.0 else f"{s.voi_delta:.4f}"
+            voi = f"{s.voi_value:.4f} (p={s.voi_p:.2f} q={s.voi_q:.2f} delta={delta})"
             if s.voi_value == 0.0:
                 reason = "cannot beat current best at any plausible price"
-        table.add_row(marker, s.kind.value, s.mode, cost, time_, certainty, voi, total, reason)
+        table.add_row(marker, kind_label, s.mode, cost, time_, certainty, voi, total, reason)
 
     console.print(table)
 
