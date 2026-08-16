@@ -23,6 +23,7 @@ import asyncio
 import random
 from datetime import UTC, datetime, timedelta
 
+import httpx
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn
 from rich.table import Table
@@ -226,7 +227,6 @@ async def _run(args: argparse.Namespace) -> None:
         cache=EmptyCacheLookup(),
         harvest_timeout_seconds=HARVEST_TIMEOUT_SECONDS,
     )
-    narrator = Narrator(clock=clock, cache=PromptCache(".llm_cache"), no_llm=args.no_llm)
 
     progress = Progress(
         TextColumn("[bold yellow]waiting for {task.fields[source]}[/bold yellow]"),
@@ -244,17 +244,26 @@ async def _run(args: argparse.Namespace) -> None:
 
     console.print(f"\n[bold]Scenario:[/bold] {scenario.name}  [bold]Preference:[/bold] {args.preference}\n")
 
-    journey_plan = await plan(request, sources, registry, clock, on_wait_tick=on_wait_tick)
+    # A real client so the LLM path (parse_intent/narrate) can actually be
+    # reached under --no-llm=False - narrate.py's _call_llm() checks
+    # self.http is None and returns early otherwise, which is exactly the
+    # bug this shared client fixes.
+    async with httpx.AsyncClient() as http:
+        narrator = Narrator(clock=clock, cache=PromptCache(".llm_cache"), http=http, no_llm=args.no_llm)
 
-    if progress_tasks:
-        progress.stop()
+        journey_plan = await plan(request, sources, registry, clock, on_wait_tick=on_wait_tick)
 
-    for decision in journey_plan.trace:
-        _print_leg_table(console, decision)
-        _print_strategies(console, decision)
-        narration = await narrator.narrate(decision)
-        console.print(f"[bold]Action:[/bold] {narration}")
-        console.print(f"[bold]Budget:[/bold] {decision.budget_before:.1f}s -> {decision.budget_after:.1f}s\n")
+        if progress_tasks:
+            progress.stop()
+
+        for decision in journey_plan.trace:
+            _print_leg_table(console, decision)
+            _print_strategies(console, decision)
+            narration = await narrator.narrate(decision)
+            console.print(
+                f"[bold]Action:[/bold] [dim]\\[narration: {narrator.last_narration_source}][/dim] {narration}"
+            )
+            console.print(f"[bold]Budget:[/bold] {decision.budget_before:.1f}s -> {decision.budget_after:.1f}s\n")
 
     console.print(f"[bold green]Done.[/bold green] {len(journey_plan.committed)} leg(s) decided.")
 

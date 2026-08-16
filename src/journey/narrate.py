@@ -16,6 +16,7 @@ a recorded demo run never depends on the network after the first pass.
 
 import hashlib
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -27,6 +28,8 @@ from journey.agent import PlanRequest
 from journey.domain import DecisionTrace, Leg, Strategy, StrategyKind
 from journey.feasibility import RouteFeasibility
 from journey.sources.base import Clock
+
+logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
@@ -98,6 +101,10 @@ class Narrator:
     cache: PromptCache
     http: httpx.AsyncClient | None = None
     no_llm: bool = False
+    # Set by narrate() on every call - "llm" or "template" - so a caller
+    # (the CLI's Action line) can show which path actually produced the
+    # last narration, not just which path was requested.
+    last_narration_source: str = "template"
 
     async def parse_intent(self, text: str) -> PlanRequest:
         preference = DEFAULT_PREFERENCE
@@ -124,8 +131,10 @@ class Narrator:
             prompt = _NARRATE_PROMPT_TEMPLATE.format(facts=_summarize_trace_for_prompt(decision_trace))
             raw = await self._call_llm(prompt)
             if raw is not None and raw.strip():
+                self.last_narration_source = "llm"
                 return raw.strip()
 
+        self.last_narration_source = "template"
         return _template_narrate(decision_trace)
 
     async def _call_llm(self, prompt: str) -> str | None:
@@ -134,7 +143,11 @@ class Narrator:
             return cached
 
         api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key or self.http is None:
+        if not api_key:
+            logger.warning("LLM path unavailable: ANTHROPIC_API_KEY is not set")
+            return None
+        if self.http is None:
+            logger.warning("LLM path unavailable: Narrator has no http client configured")
             return None
 
         try:
@@ -151,7 +164,8 @@ class Narrator:
             )
             response.raise_for_status()
             text = response.json()["content"][0]["text"]
-        except Exception:  # noqa: BLE001 - a missing/broken LLM call must never break the demo
+        except Exception as exc:  # noqa: BLE001 - a missing/broken LLM call must never break the demo
+            logger.warning("LLM call failed, falling back to template: %s: %s", type(exc).__name__, exc)
             return None
 
         self.cache.set(prompt, text)
