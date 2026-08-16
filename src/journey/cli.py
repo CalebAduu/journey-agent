@@ -1,0 +1,281 @@
+"""CLI: run a scenario (or the real route) and print each decision point
+as it happens, using Rich for the display. No decision logic lives here
+- this only formats what agent.plan() already decided.
+
+Rail is stubbed here, same as coach/flight, for a deliberate reason: the
+only genuinely-captured Transitous fixture in fixtures/ was saved via a
+raw curl call during Phase 2b reconnaissance, not through ResponseCache's
+own sha256(url+params) keying - so it isn't actually discoverable by
+ResponseCache.get() in replay mode. Wiring the real TransitousClient here
+would mean every leg shows rail as ERROR (a real, honest CacheMiss - not
+a crash - but uniformly unhelpful across all four scenarios, and fatal
+to inventory_gone specifically, which needs rail to be the reliable
+fallback). TransitousClient's real integration is already proven against
+genuine captured data by its own Phase 2b/2c tests; this CLI's scenario
+runs use stubs throughout so every scenario is self-contained and
+reproducible under --seed. --live/--replay are still real flags - they
+select ResponseCache's mode - but nothing in this file's default wiring
+currently exercises that Transitous path.
+"""
+
+import argparse
+import asyncio
+import random
+from datetime import UTC, datetime, timedelta
+
+from rich.console import Console
+from rich.progress import BarColumn, Progress, TextColumn
+from rich.table import Table
+
+from journey.agent import PlanRequest, plan
+from journey.domain import (
+    Available,
+    Conflicted,
+    Empty,
+    Leg,
+    Money,
+    NotApplicable,
+    Strategy,
+    StrategyKind,
+    Unknown,
+)
+from journey.feasibility import RouteFeasibility
+from journey.fetch import PendingRegistry
+from journey.narrate import Narrator, PromptCache
+from journey.sources.chaos import ChaosScenario, load_scenario
+from journey.sources.stubs import StubSource
+
+DEMO_BUDGET_SECONDS = 120.0
+HARVEST_TIMEOUT_SECONDS = 3.0
+
+# SPEC.md §6's fixed route.
+REAL_ROUTE = (
+    Leg(origin="Sheffield", destination="London", distance_km=260.0),
+    Leg(origin="London", destination="Berlin", distance_km=930.0),
+    Leg(origin="Berlin", destination="Potsdam", distance_km=25.0, abandonable=True),
+)
+# flight_timeout_valuable needs a leg where flight is geometrically
+# plausible AND can plausibly beat coach - none of REAL_ROUTE's three
+# legs qualify (leg 1/3 exclude flight entirely; leg 2 is long enough
+# that flight's floor always exceeds coach - see flight_timeout_worthless).
+AMSTERDAM_LEG = (Leg(origin="London", destination="Amsterdam", distance_km=360.0),)
+
+SCENARIO_ROUTES = {
+    "flight_timeout_worthless": REAL_ROUTE,
+    "flight_timeout_valuable": AMSTERDAM_LEG,
+    "price_conflict": REAL_ROUTE,
+    "inventory_gone": REAL_ROUTE,
+}
+
+STATUS_STYLE = {
+    Unknown: "red",
+    NotApplicable: "dim",
+}
+
+
+class SystemClock:
+    def now(self) -> datetime:
+        return datetime.now(UTC)
+
+    async def sleep(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+
+
+class EmptyCacheLookup:
+    def get(self, mode: str):
+        return None
+
+
+def _build_sources(scenario_name: str, scenario: ChaosScenario, seed: int, clock) -> list[StubSource]:
+    def rng(name: str) -> random.Random:
+        return random.Random(f"{seed}-{name}")
+
+    sources = [
+        StubSource(
+            name="stub-coach", mode="coach", base_price=Money(3720, "GBP"),
+            base_duration=timedelta(hours=10), scenario=scenario, rng=rng("stub-coach"), clock=clock,
+        ),
+        StubSource(
+            name="stub-flight", mode="flight", base_price=Money(7440, "GBP"),
+            base_duration=timedelta(hours=2), scenario=scenario, rng=rng("stub-flight"), clock=clock,
+        ),
+        StubSource(
+            name="stub-rail", mode="rail", base_price=Money(9100, "GBP"),
+            base_duration=timedelta(hours=8), scenario=scenario, rng=rng("stub-rail"), clock=clock,
+        ),
+    ]
+    if scenario_name == "price_conflict":
+        # A second independent flight quote - standing in for a second
+        # airline/booking site (no free flight-pricing API exists, per
+        # SPEC.md §6). Same base_price as stub-flight so price_shift on
+        # this one alone creates the conflict, not RNG jitter.
+        sources.append(
+            StubSource(
+                name="stub-flight-b", mode="flight", base_price=Money(7440, "GBP"),
+                base_duration=timedelta(hours=2), scenario=scenario, rng=rng("stub-flight-b"), clock=clock,
+            )
+        )
+    return sources
+
+
+def _fmt_money(money: Money | None) -> str:
+    return f"£{money.minor_units / 100:.2f}" if money is not None else "—"
+
+
+def _fmt_minutes(minutes: float | None) -> str:
+    if minutes is None:
+        return "—"
+    hours, mins = divmod(round(minutes), 60)
+    return f"{hours}h{mins:02d}" if hours else f"{mins}min"
+
+
+def _mode_row(mode: str, status, ranked: list[Strategy]) -> tuple[str, str, str, str]:
+    if isinstance(status, NotApplicable):
+        return (mode, "—", "—", f"[dim]NOT APPLICABLE — {status.reason}[/dim]")
+
+    if isinstance(status, Unknown):
+        details = "; ".join(o.detail for o in status.observations if o.detail) or "no observations"
+        return (mode, "—", "—", f"[red]UNKNOWN[/red] — {details}")
+
+    if isinstance(status, Empty):
+        sources = ", ".join(sorted({o.source for o in status.observations})) or "?"
+        return (mode, "—", "—", f"EMPTY — no availability ({sources})")
+
+    if isinstance(status, Conflicted):
+        price = "—"
+        if status.price_low is not None:
+            price = f"{_fmt_money(status.price_low)}–{_fmt_money(status.price_high)} (CONFLICTED)"
+        duration = "—"
+        if status.duration_low is not None:
+            duration = (
+                f"{_fmt_minutes(status.duration_low.total_seconds() / 60)}–"
+                f"{_fmt_minutes(status.duration_high.total_seconds() / 60)} (CONFLICTED)"
+            )
+        sources = ", ".join(sorted({o.source for o in status.observations}))
+        return (mode, price, duration, f"CONFLICTED — {sources}")
+
+    if isinstance(status, Available):
+        strategy = next(
+            (s for s in ranked if s.mode == mode and s.kind in (StrategyKind.COMMIT, StrategyKind.USE_CACHED)),
+            None,
+        )
+        price = "—"
+        if strategy is not None and strategy.cost_low is not None:
+            basis = f" ({strategy.cost_basis})" if strategy.cost_basis not in (None, "observed") else ""
+            price = f"{_fmt_money(strategy.cost_low)}{basis}"
+        duration = _fmt_minutes(strategy.expected_minutes) if strategy else "—"
+        fresh_sources = sorted({o.source for o in status.observations if o.status.value in ("fresh", "stale")})
+        return (mode, price, duration, f"{', '.join(fresh_sources)}: fresh" if fresh_sources else "fresh")
+
+    return (mode, "?", "?", type(status).__name__)
+
+
+def _print_leg_table(console: Console, decision) -> None:
+    table = Table(title=f"{decision.leg.origin} -> {decision.leg.destination}", show_lines=False)
+    table.add_column("Mode")
+    table.add_column("Price")
+    table.add_column("Duration")
+    table.add_column("Status")
+    for mode, status in decision.leg_view.results:
+        table.add_row(*_mode_row(mode, status, list(decision.ranked_strategies)))
+    console.print(table)
+
+
+def _print_strategies(console: Console, decision) -> None:
+    table = Table(title="Ranked strategies")
+    table.add_column("")
+    table.add_column("Kind")
+    table.add_column("Mode")
+    table.add_column("Cost")
+    table.add_column("Time")
+    table.add_column("Certainty")
+    table.add_column("VOI")
+    table.add_column("Total")
+    table.add_column("Reason")
+
+    for i, s in enumerate(decision.ranked_strategies):
+        marker = "[bold green]*[/bold green]" if i == 0 else ""
+        cost = f"{s.cost_score:.2f}" if s.cost_score is not None else "—"
+        time_ = f"{s.time_score:.2f}" if s.time_score is not None else "—"
+        certainty = f"{s.certainty_score:.2f}" if s.certainty_score is not None else "—"
+        total = f"{s.total_score:.4f}" if s.total_score is not None else "—"
+        voi = "—"
+        reason = s.reason
+        if s.kind is StrategyKind.WAIT and s.voi_value is not None:
+            voi = f"{s.voi_value:.4f} (p={s.voi_p:.2f} q={s.voi_q:.2f} delta={s.voi_delta:.4f})"
+            if s.voi_value == 0.0:
+                reason = "cannot beat current best at any plausible price"
+        table.add_row(marker, s.kind.value, s.mode, cost, time_, certainty, voi, total, reason)
+
+    console.print(table)
+
+
+async def _run(args: argparse.Namespace) -> None:
+    console = Console()
+    clock = SystemClock()
+    scenario = load_scenario(f"scenarios/{args.scenario}.yaml")
+    legs = SCENARIO_ROUTES[args.scenario]
+    sources = _build_sources(args.scenario, scenario, args.seed, clock)
+    registry = PendingRegistry()
+
+    request = PlanRequest(
+        legs=legs,
+        preference=args.preference,
+        budget_seconds=DEMO_BUDGET_SECONDS,
+        feasibility=RouteFeasibility(),
+        cache=EmptyCacheLookup(),
+        harvest_timeout_seconds=HARVEST_TIMEOUT_SECONDS,
+    )
+    narrator = Narrator(clock=clock, cache=PromptCache(".llm_cache"), no_llm=args.no_llm)
+
+    progress = Progress(
+        TextColumn("[bold yellow]waiting for {task.fields[source]}[/bold yellow]"),
+        BarColumn(),
+        TextColumn("{task.completed:.1f}s / {task.total:.1f}s"),
+        console=console,
+    )
+    progress_tasks: dict[str, int] = {}
+
+    def on_wait_tick(source: str, elapsed: float, total: float) -> None:
+        if source not in progress_tasks:
+            progress.start()
+            progress_tasks[source] = progress.add_task("wait", source=source, total=total)
+        progress.update(progress_tasks[source], completed=elapsed, total=total)
+
+    console.print(f"\n[bold]Scenario:[/bold] {scenario.name}  [bold]Preference:[/bold] {args.preference}\n")
+
+    journey_plan = await plan(request, sources, registry, clock, on_wait_tick=on_wait_tick)
+
+    if progress_tasks:
+        progress.stop()
+
+    for decision in journey_plan.trace:
+        _print_leg_table(console, decision)
+        _print_strategies(console, decision)
+        narration = await narrator.narrate(decision)
+        console.print(f"[bold]Action:[/bold] {narration}")
+        console.print(f"[bold]Budget:[/bold] {decision.budget_before:.1f}s -> {decision.budget_after:.1f}s\n")
+
+    console.print(f"[bold green]Done.[/bold green] {len(journey_plan.committed)} leg(s) decided.")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="journey", description="Journey Agent - reasons honestly about what it doesn't know.")
+    parser.add_argument("--scenario", choices=sorted(SCENARIO_ROUTES), required=True)
+    parser.add_argument("--preference", choices=("cheapest", "fastest", "reliable"), default="cheapest")
+    parser.add_argument("--replay", action="store_true", help="ResponseCache in replay mode (no network)")
+    parser.add_argument("--live", action="store_true", help="ResponseCache in live mode (real network, records fixtures)")
+    parser.add_argument("--no-llm", action="store_true", help="skip the LLM narrator, use the templated fallback")
+    parser.add_argument("--seed", type=int, default=42, help="seeds every stub source's RNG for reproducible runs")
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    if args.live and args.replay:
+        raise SystemExit("--live and --replay are mutually exclusive")
+    asyncio.run(_run(args))
+
+
+if __name__ == "__main__":
+    main()

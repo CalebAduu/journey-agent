@@ -66,15 +66,47 @@ def score_strategies(
     final = list(non_wait)
     for w in waits:
         source_rel = (source_reliability or {}).get(w.source, (0, 0))
-        value = voi(w, current_best, source_rel, budget)
+        p, q, delta = _voi_components(w, current_best, source_rel)
+        value = p * q * delta if q != 0.0 else 0.0
         cost = cost_of_waiting(w.wait_seconds, budget)
-        final.append(replace(w, total_score=current_best.total_score + value - cost, voi_value=value))
+        final.append(
+            replace(
+                w,
+                total_score=current_best.total_score + value - cost,
+                voi_value=value,
+                voi_p=p,
+                voi_q=q,
+                voi_delta=delta,
+            )
+        )
 
     return sorted(final, key=lambda s: s.total_score, reverse=True)
 
 
 def voi(strategy: Strategy, current_best: Strategy, source_reliability: tuple[int, int], budget: float) -> float:
-   
+    """p x q x delta.
+
+    q is the fraction of [worst_case_score, best_case_score] that beats
+    current_best - not just whether winning is possible, but how much of
+    the plausible range does. Scores here are "higher is better", the
+    mirror of a price-space (lower is better) version of the same
+    formula: q = (incumbent - pending_low) / (pending_high - pending_low).
+
+    Critically: q is 0 - and so the whole result is exactly 0 - whenever
+    even the best plausible outcome can't beat current_best, regardless
+    of how likely a response is.
+    """
+    p, q, delta = _voi_components(strategy, current_best, source_reliability)
+    if q == 0.0:
+        return 0.0  # information that can't change the decision is worth nothing
+    return p * q * delta
+
+
+def _voi_components(
+    strategy: Strategy, current_best: Strategy, source_reliability: tuple[int, int]
+) -> tuple[float, float, float]:
+    """p, q, delta - shared by voi() and score_strategies(), which also
+    stores them on the Strategy for display (Phase 9 CLI)."""
     best, worst = strategy.best_case_score, strategy.worst_case_score
     incumbent = current_best.total_score
 
@@ -85,14 +117,11 @@ def voi(strategy: Strategy, current_best: Strategy, source_reliability: tuple[in
     else:
         q = (best - incumbent) / (best - worst)
 
-    if q == 0.0:
-        return 0.0  # information that can't change the decision is worth nothing
-
     successes, failures = source_reliability
     p = (successes + BETA_PRIOR_ALPHA) / (successes + failures + BETA_PRIOR_ALPHA + BETA_PRIOR_BETA)
-    delta = best - incumbent
+    delta = (best - incumbent) if best is not None else 0.0
 
-    return p * q * delta
+    return p, q, delta
 
 
 def cost_of_waiting(wait_seconds: float, budget: float) -> float:

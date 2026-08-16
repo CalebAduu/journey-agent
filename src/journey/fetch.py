@@ -9,10 +9,14 @@ or cancel what's left when the deadline hits.
 """
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from journey.domain import Leg, Observation, SourceStatus
 from journey.sources.base import Source
+
+# How often wait_for()'s optional on_tick callback fires while polling a
+# pending task - fine-grained enough for a smooth CLI countdown.
+TICK_INTERVAL_SECONDS = 0.1
 
 
 class PendingRegistry:
@@ -36,15 +40,41 @@ class PendingRegistry:
     def __contains__(self, source_name: str) -> bool:
         return self.is_pending(source_name)
 
-    async def wait_for(self, source_name: str, timeout_seconds: float) -> Observation:
+    async def wait_for(
+        self,
+        source_name: str,
+        timeout_seconds: float,
+        on_tick: Callable[[float, float], None] | None = None,
+    ) -> Observation:
         """Re-await a still-pending task. Wrapped in asyncio.shield so
         that if THIS wait itself times out, the underlying task keeps
         running rather than being cancelled - a second, later wait_for
-        can still recover it."""
+        can still recover it.
+
+        on_tick, if given, fires roughly every TICK_INTERVAL_SECONDS with
+        (elapsed, timeout_seconds) - purely for a live display (Phase 9
+        CLI); omitting it preserves the exact original single-await
+        behaviour.
+        """
         task = self._tasks[source_name]
-        observation = await asyncio.wait_for(asyncio.shield(task), timeout=timeout_seconds)
-        self._tasks.pop(source_name, None)
-        return observation
+        shielded = asyncio.shield(task)
+
+        if on_tick is None:
+            observation = await asyncio.wait_for(shielded, timeout=timeout_seconds)
+            self._tasks.pop(source_name, None)
+            return observation
+
+        elapsed = 0.0
+        while elapsed < timeout_seconds:
+            step = min(TICK_INTERVAL_SECONDS, timeout_seconds - elapsed)
+            done, _pending = await asyncio.wait({shielded}, timeout=step)
+            elapsed += step
+            if shielded in done:
+                self._tasks.pop(source_name, None)
+                return shielded.result()
+            on_tick(elapsed, timeout_seconds)
+
+        raise TimeoutError(f"{source_name} did not respond within {timeout_seconds}s")
 
     async def drain(self) -> None:
         """Cancel every remaining pending task. Call at journey end, not

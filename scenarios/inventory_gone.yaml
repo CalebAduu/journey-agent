@@ -1,0 +1,11 @@
+# Real 3-leg route, leg 1 (Sheffield -> London). Coach answers but has
+# nothing available; flight is already NOT_APPLICABLE there (physical -
+# Doncaster Sheffield Airport closed). Only rail is left standing. Shows
+# three of the four epistemic states on one screen: Available (rail),
+# Empty (coach), NotApplicable (flight).
+name: inventory_gone
+directives:
+  - source: stub-coach
+    origin: Sheffield
+    destination: London
+    directive: "empty"

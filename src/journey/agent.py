@@ -6,7 +6,7 @@ keeps pending tasks alive mid-journey, but nothing should outlive the
 journey itself.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from journey.domain import (
@@ -61,6 +61,7 @@ async def plan(
     sources: Sequence[Source],
     registry: PendingRegistry,
     clock: Clock,
+    on_wait_tick: Callable[[str, float, float], None] | None = None,
 ) -> JourneyPlan:
     budget = TimeBudget(request.budget_seconds)
     trace: list[DecisionTrace] = []
@@ -68,7 +69,7 @@ async def plan(
 
     try:
         for leg in request.legs:
-            decision = await _decide_leg(leg, sources, registry, clock, request, budget)
+            decision = await _decide_leg(leg, sources, registry, clock, request, budget, on_wait_tick)
             trace.append(decision)
             committed.append(decision.choice)
     finally:
@@ -84,6 +85,7 @@ async def _decide_leg(
     clock: Clock,
     request: PlanRequest,
     budget: TimeBudget,
+    on_wait_tick: Callable[[str, float, float], None] | None = None,
 ) -> DecisionTrace:
     decided_at = clock.now()
     budget_before = budget.remaining
@@ -99,7 +101,7 @@ async def _decide_leg(
         budget=budget.remaining,
     )
 
-    choice = await act(observations, ranked, leg, registry, budget, request)
+    choice = await act(observations, ranked, leg, registry, budget, request, on_wait_tick)
 
     return DecisionTrace(
         leg=leg,
@@ -121,6 +123,7 @@ async def act(
     registry: PendingRegistry,
     budget: TimeBudget,
     request: PlanRequest,
+    on_wait_tick: Callable[[str, float, float], None] | None = None,
 ) -> Strategy:
     """Commit/UseCached/Replan/AbandonLeg: no spend, the top choice
     stands as-is - Replan and AbandonLeg both just get recorded, since
@@ -144,8 +147,9 @@ async def act(
         return top
 
     budget.spend(top.wait_seconds)
+    tick = (lambda elapsed, total: on_wait_tick(top.source, elapsed, total)) if on_wait_tick else None
     try:
-        new_observation = await registry.wait_for(top.source, top.wait_seconds)
+        new_observation = await registry.wait_for(top.source, top.wait_seconds, on_tick=tick)
     except TimeoutError:
         return next((s for s in ranked if s.kind is not StrategyKind.WAIT), top)
 

@@ -1,0 +1,26 @@
+# The same failure as flight_timeout_worthless, on a leg where it can
+# actually compete: London -> Amsterdam (360km, not part of the fixed
+# 3-leg route - flight is geometrically implausible on all three legs of
+# that route or physically excluded, so this needed a leg of its own).
+# Coach is shifted to its own high/peak-fare bound (price_shift(2.25) on
+# a base price set to its low bound = coach's own high bound exactly);
+# flight's cheapest plausible price still undercuts it. VOI > 0; the
+# agent waits.
+#
+# slow(5), not timeout(n): flight must genuinely still be in flight when
+# the wait completes so the countdown has real time to run and a fresh
+# Observation actually lands - HARVEST_TIMEOUT_SECONDS is 3.0s, so this
+# leaves ~2s still needed, comfortably inside either WAIT_DURATIONS_SECONDS
+# candidate (3.0s/8.0s). timeout(3) would make the stub's own task
+# complete at almost exactly the harvest deadline, leaving nothing left
+# to wait through.
+name: flight_timeout_valuable
+directives:
+  - source: stub-flight
+    origin: London
+    destination: Amsterdam
+    directive: "slow(5)"
+  - source: stub-coach
+    origin: London
+    destination: Amsterdam
+    directive: "price_shift(2.25)"

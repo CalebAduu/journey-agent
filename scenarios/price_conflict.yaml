@@ -1,0 +1,12 @@
+# Real 3-leg route, leg 2 (London -> Berlin, 930km) - the only leg where
+# flight is feasible. Two independent flight quotes (stub-flight and
+# stub-flight-b, standing in for two airlines/booking sites - no real
+# free flight-pricing API exists, per SPEC.md §6) disagree by 50%, well
+# past the 15% CONFLICT_THRESHOLD. merge() keeps both values as an
+# interval rather than picking one.
+name: price_conflict
+directives:
+  - source: stub-flight-b
+    origin: London
+    destination: Berlin
+    directive: "price_shift(1.5)"

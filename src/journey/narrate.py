@@ -25,6 +25,7 @@ import httpx
 
 from journey.agent import PlanRequest
 from journey.domain import DecisionTrace, Leg, Strategy, StrategyKind
+from journey.feasibility import RouteFeasibility
 from journey.sources.base import Clock
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
@@ -60,19 +61,6 @@ decision is final.
 {facts}
 
 Respond with the narration only, no preamble."""
-
-
-class _PermissiveFeasibility:
-    """Placeholder until feasibility.py (§5) exists: every mode is a
-    candidate, nothing excluded. parse_intent needs some Feasibility to
-    return a complete PlanRequest; a real cli.py should supply the
-    actual belief-based one instead."""
-
-    def candidate_modes(self, leg):
-        return ["coach", "rail", "flight"]
-
-    def reason_if_not_applicable(self, leg, mode):
-        return None
 
 
 class _EmptyCache:
@@ -127,7 +115,7 @@ class Narrator:
             legs=DEFAULT_ROUTE,
             preference=preference,
             budget_seconds=budget_seconds,
-            feasibility=_PermissiveFeasibility(),
+            feasibility=RouteFeasibility(),
             cache=_EmptyCache(),
         )
 

@@ -154,6 +154,12 @@ class Strategy:
     # distinct from total_score, which is current_best.total_score
     # adjusted by this minus cost_of_waiting.
     voi_value: float | None = None
+    # The breakdown behind voi_value, kept for display (Phase 9 CLI):
+    # p = P(source responds in time), q = fraction of the plausible range
+    # that beats current_best, delta = best_case_score - incumbent.
+    voi_p: float | None = None
+    voi_q: float | None = None
+    voi_delta: float | None = None
 
 
 @dataclass(frozen=True)
