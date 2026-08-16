@@ -1,0 +1,74 @@
+﻿[
+	{
+		"type": "stop",
+		"id": "900003201",
+		"name": "S+U Berlin Hauptbahnhof",
+		"location": {
+			"type": "location",
+			"id": "900003201",
+			"latitude": 52.525607,
+			"longitude": 13.369072
+		},
+		"products": {
+			"suburban": true,
+			"subway": true,
+			"tram": true,
+			"bus": true,
+			"ferry": false,
+			"express": true,
+			"regional": true
+		},
+		"ids": {
+			"ifopt": "de:11000:900003201"
+		},
+		"stationDHID": "de:11000:900003201"
+	},
+	{
+		"type": "stop",
+		"id": "900003205",
+		"name": "S+U Hauptbahnhof/Washingtonplatz (Berlin)",
+		"location": {
+			"type": "location",
+			"id": "900003205",
+			"latitude": 52.523387,
+			"longitude": 13.370501
+		},
+		"products": {
+			"suburban": true,
+			"subway": true,
+			"tram": true,
+			"bus": true,
+			"ferry": false,
+			"express": true,
+			"regional": true
+		},
+		"ids": {
+			"ifopt": "de:11000:900003205"
+		},
+		"stationDHID": "de:11000:900003205"
+	},
+	{
+		"type": "stop",
+		"id": "900037168",
+		"name": "Berlin, Albrechtshof Bhf",
+		"location": {
+			"type": "location",
+			"id": "900037168",
+			"latitude": 52.549339,
+			"longitude": 13.129159
+		},
+		"products": {
+			"suburban": false,
+			"subway": false,
+			"tram": false,
+			"bus": true,
+			"ferry": false,
+			"express": false,
+			"regional": true
+		},
+		"ids": {
+			"ifopt": "de:11000:900037168"
+		},
+		"stationDHID": "de:11000:900037168"
+	}
+]

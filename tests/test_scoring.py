@@ -1,0 +1,176 @@
+"""Phase 6: scoring and VOI.
+
+SPEC.md §9 Phase 6 done-when, the two tests the video points at:
+(a) pending source cannot beat current best even at best case -> Wait
+    ranks last, VOI = 0.
+(b) it plausibly can -> Wait ranks above Commit.
+Plus §8's demo moment: same failure, different winner under cheapest vs
+reliable.
+"""
+
+from datetime import timedelta
+
+from journey.domain import (
+    Available,
+    Conflicted,
+    LegView,
+    Money,
+    Observation,
+    SourceStatus,
+    Strategy,
+    StrategyKind,
+    Unknown,
+)
+from journey.scoring import score_strategies, voi
+
+SHEFFIELD_LONDON_KM = 260.0
+
+
+def test_wait_ranks_last_with_voi_zero_when_it_cannot_beat_current_best():
+    # Coach: cheap and certain. Flight: pending, but even its cheapest
+    # plausible price (MIN_FARE floor, since 260km is short for flight's
+    # own per-km rate) is still worse than coach's actual price.
+    coach_observation = Observation(
+        source="stub-coach",
+        mode="coach",
+        status=SourceStatus.FRESH,
+        price=Money(2000, "GBP"),
+        duration=timedelta(minutes=240),
+    )
+    flight_timeout = Observation(source="stub-flight", mode="flight", status=SourceStatus.TIMED_OUT)
+
+    leg_view = LegView(
+        origin="Sheffield",
+        destination="London",
+        results=(
+            ("coach", Available(observations=(coach_observation,))),
+            ("flight", Unknown(observations=(flight_timeout,))),
+        ),
+        distance_km=SHEFFIELD_LONDON_KM,
+    )
+
+    coach_commit = Strategy(
+        kind=StrategyKind.COMMIT,
+        mode="coach",
+        source="stub-coach",
+        reason="commit to coach",
+        cost_low=Money(2000, "GBP"),
+        cost_high=Money(2000, "GBP"),
+        cost_basis="observed",
+    )
+    flight_wait = Strategy(
+        kind=StrategyKind.WAIT, mode="flight", source="stub-flight", wait_seconds=3.0, reason="wait for flight"
+    )
+
+    ranked = score_strategies([coach_commit, flight_wait], leg_view, "cheapest", budget=300.0)
+
+    assert ranked[0].kind is StrategyKind.COMMIT
+    assert ranked[-1].kind is StrategyKind.WAIT
+
+    current_best, wait_scored = ranked[0], ranked[-1]
+    assert voi(wait_scored, current_best, (0, 0), 300.0) == 0.0
+
+
+def test_wait_ranks_above_commit_when_it_plausibly_can_beat_current_best():
+    # Same shape, but now coach is the expensive option and flight's
+    # cheapest plausible price genuinely undercuts it.
+    coach_observation = Observation(
+        source="stub-coach",
+        mode="coach",
+        status=SourceStatus.FRESH,
+        price=Money(6000, "GBP"),
+        duration=timedelta(minutes=240),
+    )
+    flight_timeout = Observation(source="stub-flight", mode="flight", status=SourceStatus.TIMED_OUT)
+
+    leg_view = LegView(
+        origin="Sheffield",
+        destination="London",
+        results=(
+            ("coach", Available(observations=(coach_observation,))),
+            ("flight", Unknown(observations=(flight_timeout,))),
+        ),
+        distance_km=SHEFFIELD_LONDON_KM,
+    )
+
+    coach_commit = Strategy(
+        kind=StrategyKind.COMMIT,
+        mode="coach",
+        source="stub-coach",
+        reason="commit to coach",
+        cost_low=Money(6000, "GBP"),
+        cost_high=Money(6000, "GBP"),
+        cost_basis="observed",
+    )
+    flight_wait = Strategy(
+        kind=StrategyKind.WAIT, mode="flight", source="stub-flight", wait_seconds=3.0, reason="wait for flight"
+    )
+
+    ranked = score_strategies([coach_commit, flight_wait], leg_view, "cheapest", budget=300.0)
+
+    assert ranked[0].kind is StrategyKind.WAIT
+    assert ranked[1].kind is StrategyKind.COMMIT
+
+    # recover the scored pair to check voi() directly too
+    non_wait = next(s for s in ranked if s.kind is StrategyKind.COMMIT)
+    wait_scored = next(s for s in ranked if s.kind is StrategyKind.WAIT)
+    assert voi(wait_scored, non_wait, (0, 0), 300.0) > 0.0
+
+
+def test_same_failure_produces_different_winners_under_cheapest_vs_reliable():
+    # A cheap answer that's genuinely contested (Conflicted) vs an
+    # expensive answer that's fully confirmed (Available). Same
+    # candidates, same failure behind the conflict - only the preference
+    # weights change.
+    flight_low = Observation(source="stub-flight", mode="flight", status=SourceStatus.FRESH, price=Money(3000, "GBP"))
+    flight_high = Observation(
+        source="stub-flight-b", mode="flight", status=SourceStatus.FRESH, price=Money(5000, "GBP")
+    )
+    rail_observation = Observation(
+        source="transitous", mode="rail", status=SourceStatus.FRESH, price=Money(8000, "GBP")
+    )
+
+    leg_view = LegView(
+        origin="Sheffield",
+        destination="London",
+        results=(
+            (
+                "flight",
+                Conflicted(
+                    dimension="price",
+                    observations=(flight_low, flight_high),
+                    price_low=Money(3000, "GBP"),
+                    price_high=Money(5000, "GBP"),
+                ),
+            ),
+            ("rail", Available(observations=(rail_observation,))),
+        ),
+        distance_km=SHEFFIELD_LONDON_KM,
+    )
+
+    # Commit picks one of the conflicting observations - here, flight_low.
+    cheap_but_contested = Strategy(
+        kind=StrategyKind.COMMIT,
+        mode="flight",
+        source="stub-flight",
+        reason="commit to flight",
+        cost_low=Money(3000, "GBP"),
+        cost_high=Money(3000, "GBP"),
+        cost_basis="observed",
+    )
+    expensive_but_confirmed = Strategy(
+        kind=StrategyKind.COMMIT,
+        mode="rail",
+        source="transitous",
+        reason="commit to rail",
+        cost_low=Money(8000, "GBP"),
+        cost_high=Money(8000, "GBP"),
+        cost_basis="observed",
+    )
+    candidates = [cheap_but_contested, expensive_but_confirmed]
+
+    cheapest_ranked = score_strategies(candidates, leg_view, "cheapest")
+    reliable_ranked = score_strategies(candidates, leg_view, "reliable")
+
+    assert cheapest_ranked[0].mode == "flight"
+    assert reliable_ranked[0].mode == "rail"

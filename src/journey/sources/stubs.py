@@ -71,7 +71,7 @@ class StubSource:
             return Observation(
                 source=self.name,
                 mode=self.mode,
-                status=SourceStatus.FRESH,
+                status=SourceStatus.FRESH_EMPTY,
                 detail="no availability",
                 observed_at=self.clock.now(),
             )

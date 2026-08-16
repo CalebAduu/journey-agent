@@ -16,4 +16,7 @@ class Clock(Protocol):
 
 @runtime_checkable
 class Source(Protocol):
+    name: str
+    mode: str
+
     async def fetch(self, leg: Leg) -> Observation: ...

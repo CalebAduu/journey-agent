@@ -1,0 +1,74 @@
+﻿[
+	{
+		"type": "stop",
+		"id": "900230999",
+		"name": "S Potsdam Hauptbahnhof",
+		"location": {
+			"type": "location",
+			"id": "900230999",
+			"latitude": 52.391443,
+			"longitude": 13.06716
+		},
+		"products": {
+			"suburban": true,
+			"subway": false,
+			"tram": true,
+			"bus": true,
+			"ferry": false,
+			"express": true,
+			"regional": true
+		},
+		"ids": {
+			"ifopt": "de:12054:900230999"
+		},
+		"stationDHID": "de:12054:900230999"
+	},
+	{
+		"type": "stop",
+		"id": "900230233",
+		"name": "Potsdam, Hauptbahnhof/Friedrich-Engels-Str.",
+		"location": {
+			"type": "location",
+			"id": "900230233",
+			"latitude": 52.390338,
+			"longitude": 13.066351
+		},
+		"products": {
+			"suburban": true,
+			"subway": false,
+			"tram": true,
+			"bus": true,
+			"ferry": false,
+			"express": true,
+			"regional": true
+		},
+		"ids": {
+			"ifopt": "de:12054:900230233"
+		},
+		"stationDHID": "de:12054:900230233"
+	},
+	{
+		"type": "stop",
+		"id": "900230005",
+		"name": "S Potsdam Hauptbahnhof/Nord ILB",
+		"location": {
+			"type": "location",
+			"id": "900230005",
+			"latitude": 52.392729,
+			"longitude": 13.066846
+		},
+		"products": {
+			"suburban": true,
+			"subway": false,
+			"tram": true,
+			"bus": true,
+			"ferry": false,
+			"express": true,
+			"regional": true
+		},
+		"ids": {
+			"ifopt": "de:12054:900230005"
+		},
+		"stationDHID": "de:12054:900230005"
+	}
+]

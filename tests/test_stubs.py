@@ -89,13 +89,14 @@ def test_error_scenario_returns_error_without_raising():
     assert observation.price is None
 
 
-def test_empty_scenario_returns_fresh_with_no_price():
+def test_empty_scenario_returns_fresh_empty_without_price_or_duration():
     source = make_source(scenario=directive_scenario(EmptyResponse()))
 
     observation = asyncio.run(source.fetch(LEG))
 
-    assert observation.status == SourceStatus.FRESH
+    assert observation.status == SourceStatus.FRESH_EMPTY
     assert observation.price is None
+    assert observation.duration is None
 
 
 def test_price_shift_scenario_changes_price_by_exact_factor():
