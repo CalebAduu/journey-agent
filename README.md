@@ -10,15 +10,24 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-Every scenario below runs with `--replay` and `--no-llm` - no network call and no API key required, ever. `--replay` isn't load-bearing right now (see "What's unfinished" - the real network path isn't wired into the CLI yet), but it's the flag you should get in the habit of passing.
+`--replay` isn't load-bearing right now (see "What's unfinished" - the real network path isn't wired into the CLI yet), but it's the flag you should get in the habit of passing.
+
+**Quickstart (no API key needed):**
 
 ```bash
-python -m journey.cli --scenario flight_timeout_worthless --no-llm --replay
-python -m journey.cli --scenario flight_timeout_valuable --no-llm --replay
-python -m journey.cli --scenario price_conflict --no-llm --replay
+python -m journey.cli --scenario flight_timeout_worthless --replay --no-llm
 ```
 
-A fourth scenario, `inventory_gone`, exists too. Preference defaults to `cheapest`; pass `--preference fastest` or `--preference reliable` to see the same failure produce a different winner. Drop `--no-llm` and set `ANTHROPIC_API_KEY` for real narration; without a key the templated fallback runs automatically and produces identical decisions either way.
+**With the LLM layer** - natural-language intent parsing and plain-English narration of each decision:
+
+```bash
+export ANTHROPIC_API_KEY=sk-...
+python -m journey.cli --scenario flight_timeout_worthless --replay
+```
+
+The LLM is confined to the edges: parsing what the traveller asked for, and explaining what the agent decided. All ranking, VOI, and conflict resolution are deterministic and unit-tested. `--no-llm` runs the full agent with templated text - same decisions either way, just described differently.
+
+Two more scenarios worth running: `--scenario flight_timeout_valuable` (the same kind of failure as above, but where waiting genuinely pays off) and `--scenario price_conflict` (two sources disagree, both values kept). A fourth, `inventory_gone`, exists too. Preference defaults to `cheapest`; pass `--preference fastest` or `--preference reliable` to see the same failure produce a different winner.
 
 ## The core idea
 
