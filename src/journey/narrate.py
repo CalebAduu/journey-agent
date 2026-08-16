@@ -77,6 +77,11 @@ speculate about anything the agent doesn't track - no travel conditions, weather
 or real-time availability. A mode listed as not applicable was never in contention and has no price worth \
 comparing - don't mention it beyond its listed reason, if at all.
 
+Never calculate or state a numeric gap between two values (e.g. "10 minutes longer", "£5 cheaper"). You \
+are not reliable at this arithmetic and a wrong number is worse than no number. Compare options only in \
+words - cheaper, pricier, faster, slower - with no figure attached, unless that exact figure already \
+appears above as its own fact.
+
 If the strategy under "Chosen" has kind "wait": the agent has decided only to wait longer for that source \
 to respond. It has NOT chosen, picked, or selected that source's mode, and nothing about it is booked, \
 confirmed, or committed - there is no result yet to commit to. Say only that the agent is waiting or \
