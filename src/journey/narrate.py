@@ -82,6 +82,11 @@ are not reliable at this arithmetic and a wrong number is worse than no number. 
 words - cheaper, pricier, faster, slower - with no figure attached, unless that exact figure already \
 appears above as its own fact.
 
+The budget above is the agent's own time for waiting on slow sources to respond, measured in seconds. It \
+has nothing to do with how long the journey itself takes. Never compare a travel time (minutes or hours) \
+to the budget (seconds), and never describe a journey as fitting "within the budget" - that comparison \
+doesn't mean anything.
+
 If the strategy under "Chosen" has kind "wait": the agent has decided only to wait longer for that source \
 to respond. It has NOT chosen, picked, or selected that source's mode, and nothing about it is booked, \
 confirmed, or committed - there is no result yet to commit to. Say only that the agent is waiting or \
