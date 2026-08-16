@@ -69,6 +69,10 @@ These are five separate frozen dataclasses under a shared marker base with no fi
 - **DB** (`v6.db.transport.rest`) - confirmed returning `503 Service Unavailable` on every endpoint (`/locations`, `/stations`, `/journeys`) via direct investigation, with the docs page loading fine - the backend itself is down, not a bad query. No `DbClient` was built: there was nothing live to build a parser against.
 - **Flights and coach** - stubbed, on every leg, unconditionally. No free flight-pricing API exists: Amadeus's Self-Service sandbox shut down 17 July 2026, and nothing replaced it.
 
+## Chaos injection
+
+Failures are injected via a chaos layer wrapping the same source protocol as the real clients, so they're reproducible for testing and demonstration. The agent's response to them is not scripted — identical faults produce different decisions depending on the economics, as `flight_timeout_worthless` and `flight_timeout_valuable` show. Deutsche Bahn's outage during development was a genuine, uninjected failure handled by the same code path.
+
 ## The pricing priors
 
 `COST_PER_KM` and `MIN_FARE` (`pricing.py`) are hand-specified, not derived from fare data - back-solved from a handful of known real fares rather than measured systematically. The ranges are wide on purpose: UK rail on the same train can vary roughly threefold depending on booking horizon alone, so a narrow prior would be confidently wrong more often than a wide one is uselessly vague. In production these would come from historical per-route fare observations instead of hand-set bounds.
