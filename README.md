@@ -212,7 +212,9 @@ Because this formula differs, the CLI prints a legend under every table naming t
 
 **1. `--scenario flight_timeout --preference cheapest`** — *information that cannot change the decision is worth nothing.*
 
-Leg 1 (Sheffield->London) is the quiet baseline: coach £38.28 wins at `0.8000`, flight is `NOT APPLICABLE` because Doncaster Sheffield Airport is closed — a hardcoded physical exclusion, and one that costs no certainty. Leg 2 is the point of the whole project: flight times out, and the agent ranks two `Wait` options **below** committing, because `q = 0`. The `cached` row appears here too, at `£71.40–£78.83 (0.32) 26h stale`, scoring `0.3855` — real information, correctly discounted, still not competitive. Leg 3 offers `abandon_leg` at `0.5500` (Berlin->Potsdam is the one abandonable leg) and coach still wins at `0.8000`.
+Leg 1 (Sheffield->London) is the quiet baseline: coach £38.28 wins at `0.8000`, flight is `NOT APPLICABLE` because Doncaster Sheffield Airport is closed — a hardcoded physical exclusion, and one that costs no certainty. Leg 2 is the point of the whole project: flight misses the 3s harvest deadline and merges as `Unknown`, and the agent ranks two `Wait` options **below** committing, because `q = 0`. The `cached` row appears here too, at `£71.40–£78.83 (0.32) 26h stale`, scoring `0.3855` — real information, correctly discounted, still not competitive. Leg 3 offers `abandon_leg` at `0.5500` (Berlin->Potsdam is the one abandonable leg) and coach still wins at `0.8000`.
+
+The flight in this scenario does eventually answer, at £180.00 — but under `cheapest` the agent never waits, so it never finds out. Declining to spend three seconds on information that provably cannot change the answer *is* the result.
 
 **2. `--scenario inventory_gone`** — *empty is not the same as unknown.*
 
@@ -220,7 +222,17 @@ Leg 1: coach comes back `EMPTY` — the source answered, and the answer was "not
 
 **3. `--scenario flight_timeout --preference fastest`** — *the same failure, a different answer.*
 
-Nothing about the world changed: identical scenario, identical seed, identical injected timeout. Only the weights moved. Leg 1 flips from coach to **rail** (`0.8000` vs coach's `0.3000` — the exact mirror of run 1). Leg 2 flips harder: `wait 3s` now ranks **first** at `0.6635`, because with time weighted at 0.7 the flight's two-hour journey means even its worst plausible price beats the incumbent, so `q` goes from `0.0000` to `1.0000` and VOI from `0.0000` to `0.1963`. The agent genuinely waits, and the budget drops `120.0s -> 117.0s`. That budget spend is the honest cost of the decision, and it is the only thing in the run that consumes it.
+Nothing about the world changed: identical scenario, identical seed, identical injected fault. Only the weights moved. Leg 1 flips from coach to **rail** (`0.8000` vs coach's `0.3000` — the exact mirror of run 1). Leg 2 flips harder: `wait 3s` now ranks **first** at `0.6635`, because with time weighted at 0.7 the flight's two-hour journey means even its worst plausible price beats the incumbent, so `q` goes from `0.0000` to `1.0000` and VOI from `0.0000` to `0.1963`.
+
+So the agent waits — and this time the wait resolves. The CLI prints the step, because the committed strategy is no longer row 1 of the table above it and would otherwise look unexplained:
+
+```
+Waited: stub-flight answered £180.00, 2h00 -> re-ranked -> commit flight via stub-flight
+```
+
+The arrival re-runs the whole pipeline — re-merge, re-generate, re-score — against the new evidence. Flight is now `Available` rather than `Unknown`, which also drops the `cached` row: a stale price is a fallback for not having a live one, and there is now a live one. Against coach and rail, flight commits at `0.8000` — `0.2 × 0.0000 + 0.7 × 1.0000 + 0.1 × 1.0000`, winning on the 2h journey while being the most expensive fare on the leg. Budget drops `120.0s -> 117.0s`, the honest cost of the decision, and the only thing in the whole run that consumes it.
+
+Worth saying plainly: £180.00 loses under `cheapest` and wins under `fastest`. The agent did not get a better flight by waiting — it got the *same* flight, and only one of the two preferences had any reason to pay three seconds to find out about it.
 
 ## Sources: what's real and what isn't
 
@@ -232,7 +244,7 @@ Nothing about the world changed: identical scenario, identical seed, identical i
 
 ## Chaos injection
 
-Failures are injected via a chaos layer wrapping the same source protocol as the real clients, so they're reproducible for testing and demonstration. The agent's response to them is not scripted — identical faults produce different decisions depending on the economics, as `flight_timeout` and `flight_timeout_valuable` show. Deutsche Bahn's outage during development was a genuine, uninjected failure handled by the same code path.
+Failures are injected via a chaos layer wrapping the same source protocol as the real clients, so they're reproducible for testing and demonstration. The agent's response to them is not scripted — the *same* injected fault produces a different decision depending on the economics. `flight_timeout` is the cleanest demonstration: one scenario, one seed, one slow flight source, and the agent declines to wait under `--preference cheapest` but waits and commits to the flight under `--preference fastest`. Deutsche Bahn's outage during development was a genuine, uninjected failure handled by the same code path.
 
 ## Design decisions, with trade-offs
 
