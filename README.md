@@ -15,14 +15,14 @@ pip install -e ".[dev]"
 **Quickstart (no API key needed):**
 
 ```bash
-python -m journey.cli --scenario flight_timeout_worthless --replay --no-llm
+python -m journey.cli --scenario flight_timeout --replay --no-llm
 ```
 
 **With the LLM layer** - natural-language intent parsing and plain-English narration of each decision:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-...
-python -m journey.cli --scenario flight_timeout_worthless --replay
+$env:ANTHROPIC_API_KEY = "sk..."
+python -m journey.cli --scenario flight_timeout --replay
 ```
 
 The LLM is confined to the edges: parsing what the traveller asked for, and explaining what the agent decided. All ranking, VOI, and conflict resolution are deterministic and unit-tested. `--no-llm` runs the full agent with templated text - same decisions either way, just described differently.
