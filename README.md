@@ -262,7 +262,8 @@ Failures are injected via a chaos layer wrapping the same source protocol as the
 - `AbandonLeg` records the choice but doesn't reconnect route topology - if a middle leg were abandoned, the next leg's origin wouldn't automatically adjust to wherever the journey actually ended up.
 - There's no arrival deadline, so nothing constrains or even tests "the journey takes too long" - `--preference fastest` is a scoring weight, not a cutoff. An `--arrive-by` flag that turned it into a hard constraint (reject or reroute strategies that blow the deadline, rather than just rank them lower) would be a genuinely good addition. Out of scope for this build.
 - `--live` and `--replay` are real, parsed CLI flags, but nothing in the current scenario wiring exercises the real-network path - every scenario uses stub sources throughout, for reasons explained in `cli.py`'s own module docstring (the one genuinely captured Transitous fixture isn't keyed the way `ResponseCache` would need to find it in replay mode).
-
+# Hard constraints vs. soft preferences.
+- The agent optimises a weighted objective — under fastest, time carries 70% of the weight, so a fast-but-expensive option wins and the cheaper alternative is shown beside it with the trade-off visible. What it doesn't support is a hard constraint like fastest under £200, where an option breaching the ceiling is removed before scoring rather than down-weighted. This is a deliberate scope decision: a soft weight and a hard constraint act at different stages of the pipeline (scoring vs. eligibility filtering), and I chose to build the reasoning layer thoroughly rather than half-build a constraint system. With more time I'd add --max-cost / --arrive-by as pre-scoring filters, including the case where a constraint eliminates every option and the agent must report that honestly rather than returning nothing.
 ## Tests
 
 ```bash
