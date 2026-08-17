@@ -21,7 +21,7 @@ python -m journey.cli --scenario flight_timeout --replay --no-llm
 **With the LLM layer** - natural-language intent parsing and plain-English narration of each decision:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-...
+$env:ANTHROPIC_API_KEY = "sk..."   # export ANTHROPIC_API_KEY=sk-... on macOS/Linux
 python -m journey.cli --scenario flight_timeout --replay
 ```
 
