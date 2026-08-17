@@ -261,15 +261,19 @@ What it does **not** support is a hard constraint — *fastest under £200* — 
 
 This is a deliberate scope decision rather than an oversight. A soft weight and a hard constraint act at different stages of the pipeline — scoring versus eligibility filtering — and I chose to build the reasoning layer thoroughly rather than half-build a constraint system alongside it. With more time I'd add `--max-cost` and `--arrive-by` as pre-scoring filters, including the case that makes constraints genuinely interesting: when a constraint eliminates every option, the agent has to say so honestly rather than return nothing or quietly relax the constraint. That failure mode is the same class of problem as the rest of this project — the difference between "no answer" and "no acceptable answer" is exactly the kind of distinction the type system here exists to keep separate.
 
-## What's unfinished
 
-- Full VBB/BVG parsers were never built - only VBB's `/locations` endpoint was verified live; BVG was never queried.
-- No `DbClient` exists - DB's 503 was confirmed by direct investigation, not by an integrated, tested client.
-- The feasibility belief-update layer (§5 point 4 - LLM priors, updated from observations) wasn't built. Only the physical and geometric layers exist.
-- `Replan` is a same-leg mode swap (fly instead of coach), not a multi-leg reroute - it can't route around a leg entirely.
-- `AbandonLeg` records the choice but doesn't reconnect route topology - if a middle leg were abandoned, the next leg's origin wouldn't automatically adjust to wherever the journey actually ended up.
-- No hard constraints: `--preference fastest` is a scoring weight, not a cutoff, and there's no `--max-cost` or `--arrive-by`. Nothing constrains or even tests "the journey takes too long" - see [Hard constraints vs. soft preferences](#hard-constraints-vs-soft-preferences) for why, and what adding them would involve.
-- `--live` and `--replay` are real, parsed CLI flags, but nothing in the current scenario wiring exercises the real-network path - every scenario uses stub sources throughout, for reasons explained in `cli.py`'s own module docstring (the one genuinely captured Transitous fixture isn't keyed the way `ResponseCache` would need to find it in replay mode).
+
+## What I'd build next given more time
+
+A second integrated real source. Transitous is fully wired and tested against recorded fixtures; VBB's /locations was verified live and BVG confirmed reachable, but neither has a parser. This is the highest-value next step because it turns duration conflict on the Berlin legs from injected into observed — the conflict-detection code path already exists and is unit-tested, so the work is a VbbClient parser mapping their response shape into Observation, not new logic. The two services share DB's API shape, so one parser covers both.
+
+Feasibility belief-updates. The physical and geometric layers work; the belief-update layer (LLM-seeded priors that shift as real observations arrive) is specified in SPEC.md §5 but unbuilt. The structure is there — FeasibilityBelief carries p_feasible and an observation count — so the remaining work is the update rule and wiring it to harvest results. I stopped at the two deterministic layers because they're defensible without a calibration story; the learned layer needs data I'd want to validate before trusting.
+
+Hard constraints. --preference fastest is a scoring weight, not a cutoff — there's no --max-cost or --arrive-by, so nothing removes an option for breaching a ceiling rather than merely down-weighting it. This is a deliberate boundary, not an oversight: a soft weight and a hard constraint act at different pipeline stages (scoring vs. eligibility filtering), and I built the reasoning layer thoroughly rather than half-building both. Adding them means a pre-scoring filter plus the edge case where a constraint eliminates every option and the agent must report that honestly rather than returning nothing. See Hard constraints vs. soft preferences.
+
+Richer replanning. Replan currently swaps modes within a leg; it can't reroute across legs via a different hub. AbandonLeg records the choice but doesn't reconnect route topology — abandon a middle leg and the next leg's origin wouldn't adjust. Both are safe in the current demo because only the final contingency leg is abandonable, but a general solution needs the journey represented as a graph the agent can re-solve, rather than a fixed three-leg list.
+
+Exercising the real-network path. --live and --replay are parsed and real, but every shipped scenario uses stubs, because the one captured Transitous fixture isn't keyed the way ResponseCache looks it up in replay. Reconciling that — so --replay serves recorded real responses and --live records fresh ones — is small but I deprioritised it below getting the reasoning layer correct.
 
 ## Tests
 
