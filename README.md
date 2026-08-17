@@ -91,6 +91,7 @@ Failures are injected via a chaos layer wrapping the same source protocol as the
 - The feasibility belief-update layer (§5 point 4 - LLM priors, updated from observations) wasn't built. Only the physical and geometric layers exist.
 - `Replan` is a same-leg mode swap (fly instead of coach), not a multi-leg reroute - it can't route around a leg entirely.
 - `AbandonLeg` records the choice but doesn't reconnect route topology - if a middle leg were abandoned, the next leg's origin wouldn't automatically adjust to wherever the journey actually ended up.
+- There's no arrival deadline, so nothing constrains or even tests "the journey takes too long" - `--preference fastest` is a scoring weight, not a cutoff. An `--arrive-by` flag that turned it into a hard constraint (reject or reroute strategies that blow the deadline, rather than just rank them lower) would be a genuinely good addition. Out of scope for this build.
 - `--live` and `--replay` are real, parsed CLI flags, but nothing in the current scenario wiring exercises the real-network path - every scenario uses stub sources throughout, for reasons explained in `cli.py`'s own module docstring (the one genuinely captured Transitous fixture isn't keyed the way `ResponseCache` would need to find it in replay mode).
 
 ## Tests
