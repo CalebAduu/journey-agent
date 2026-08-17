@@ -45,6 +45,7 @@ from journey.fetch import PendingRegistry
 from journey.merge import CONFLICTED_CERTAINTY
 from journey.narrate import Narrator, PromptCache
 from journey.pricing import infer_cost
+from journey.scoring import PREFERENCE_WEIGHTS
 from journey.sources.chaos import ChaosScenario, load_scenario
 from journey.sources.stubs import StubSource
 
@@ -262,7 +263,7 @@ def _print_leg_table(console: Console, decision) -> None:
     console.print(table)
 
 
-def _print_strategies(console: Console, decision) -> None:
+def _print_strategies(console: Console, decision, weights: tuple[float, float, float]) -> None:
     """Real values lead, normalised scores follow in brackets, so the
     trade-off is readable AND the weighted arithmetic stays auditable.
     Reason moves to its own line under each row: with real prices and
@@ -272,9 +273,14 @@ def _print_strategies(console: Console, decision) -> None:
     table.add_column("#")
     table.add_column("Kind")
     table.add_column("Mode")
-    table.add_column("Cost")
-    table.add_column("Time")
-    table.add_column("Certainty")
+    # The weight is in the header so the arithmetic is checkable off the
+    # row itself: Total = cost_score x w_cost + time_score x w_time +
+    # certainty_score x w_certainty. The weights come from the preference,
+    # which is why the same failure can rank differently under another one.
+    cost_weight, time_weight, certainty_weight = weights
+    table.add_column(f"Cost x{cost_weight:g}")
+    table.add_column(f"Time x{time_weight:g}")
+    table.add_column(f"Certainty x{certainty_weight:g}")
     table.add_column("VOI")
     table.add_column("Total")
 
@@ -323,6 +329,16 @@ def _print_strategies(console: Console, decision) -> None:
     for line in reasons:
         console.print(f"  [dim]{line}[/dim]")
 
+    # Without this the Wait rows read as broken arithmetic: their
+    # cost/time/certainty scores are real and shown, but their Total comes
+    # from the VOI path instead of the weighted sum (scoring.py runs VOI
+    # in the same score units, so re-applying the weights would
+    # double-count it).
+    console.print(
+        f"  [dim]Total = cost x{cost_weight:g} + time x{time_weight:g} + certainty x{certainty_weight:g}"
+        f"   (Wait rows instead: best non-wait total + VOI - cost of waiting)[/dim]\n"
+    )
+
 
 async def _run(args: argparse.Namespace) -> None:
     console = Console()
@@ -355,7 +371,11 @@ async def _run(args: argparse.Namespace) -> None:
             progress_tasks[source] = progress.add_task("wait", source=source, total=total)
         progress.update(progress_tasks[source], completed=elapsed, total=total)
 
-    console.print(f"\n[bold]Scenario:[/bold] {scenario.name}  [bold]Preference:[/bold] {args.preference}\n")
+    weights = PREFERENCE_WEIGHTS[args.preference]
+    console.print(
+        f"\n[bold]Scenario:[/bold] {scenario.name}  [bold]Preference:[/bold] {args.preference}"
+        f"  [dim]-> weights: cost x{weights[0]:g}, time x{weights[1]:g}, certainty x{weights[2]:g}[/dim]\n"
+    )
 
     # A real client so the LLM path (parse_intent/narrate) can actually be
     # reached under --no-llm=False - narrate.py's _call_llm() checks
@@ -371,7 +391,7 @@ async def _run(args: argparse.Namespace) -> None:
 
         for decision in journey_plan.trace:
             _print_leg_table(console, decision)
-            _print_strategies(console, decision)
+            _print_strategies(console, decision, weights)
             narration = await narrator.narrate(decision)
             console.print(
                 f"[bold]Action:[/bold] [dim]\\[narration: {narrator.last_narration_source}][/dim] {narration}"
