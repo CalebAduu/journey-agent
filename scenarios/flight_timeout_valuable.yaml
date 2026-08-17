@@ -1,4 +1,4 @@
-# The same failure as flight_timeout_worthless, on a leg where it can
+# The same failure as flight_timeout, on a leg where it can
 # actually compete: London -> Amsterdam (360km, not part of the fixed
 # 3-leg route - flight is geometrically implausible on all three legs of
 # that route or physically excluded, so this needed a leg of its own).

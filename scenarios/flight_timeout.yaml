@@ -2,7 +2,7 @@
 # and is genuinely still pending - but even at its cheapest plausible
 # price (infer_cost's floor for 930km), it can't beat coach's actual
 # price. VOI = 0 exactly; the agent correctly declines to wait.
-name: flight_timeout_worthless
+name: flight_timeout
 directives:
   - source: stub-flight
     origin: London

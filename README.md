@@ -15,14 +15,14 @@ pip install -e ".[dev]"
 **Quickstart (no API key needed):**
 
 ```bash
-python -m journey.cli --scenario flight_timeout_worthless --replay --no-llm
+python -m journey.cli --scenario flight_timeout --replay --no-llm
 ```
 
 **With the LLM layer** - natural-language intent parsing and plain-English narration of each decision:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-...
-python -m journey.cli --scenario flight_timeout_worthless --replay
+python -m journey.cli --scenario flight_timeout --replay
 ```
 
 The LLM is confined to the edges: parsing what the traveller asked for, and explaining what the agent decided. All ranking, VOI, and conflict resolution are deterministic and unit-tested. `--no-llm` runs the full agent with templated text - same decisions either way, just described differently.
@@ -54,7 +54,7 @@ These are five separate frozen dataclasses under a shared marker base with no fi
 
 `cost_of_waiting = wait_seconds × VALUE_OF_TIME + DOWNSTREAM_SLACK_RISK_COEFFICIENT × (wait_seconds / remaining_budget)` - the second term is why the identical failure ranks `Wait` first on an early leg and `Commit` first later: the same wait costs more as the journey's remaining slack shrinks.
 
-**Worked example, both taken from an actual run** (`--scenario flight_timeout_worthless` / `flight_timeout_valuable`, `--seed 42`):
+**Worked example, both taken from an actual run** (`--scenario flight_timeout` / `flight_timeout_valuable`, `--seed 42`):
 
 - London → Berlin (930km), flight pending: coach's incumbent score is `0.8000`. Flight's best plausible case scores `0.5058` - already below the incumbent - so `q = 0.0000` and `voi = 0.0000` exactly, regardless of `p`. The agent commits to coach without waiting.
 - London → Amsterdam (360km), same kind of failure, coach priced at its own high/peak bound instead of its floor: flight's best case now scores `1.0000` against an incumbent of `0.8000`. `p = 0.5000`, `q = 0.2857`, `Δ = 0.2000`, `voi = 0.0286` - small, but enough to beat `cost_of_waiting` at that leg's budget, so `Wait` ranks first and the agent holds.
@@ -71,7 +71,7 @@ These are five separate frozen dataclasses under a shared marker base with no fi
 
 ## Chaos injection
 
-Failures are injected via a chaos layer wrapping the same source protocol as the real clients, so they're reproducible for testing and demonstration. The agent's response to them is not scripted — identical faults produce different decisions depending on the economics, as `flight_timeout_worthless` and `flight_timeout_valuable` show. Deutsche Bahn's outage during development was a genuine, uninjected failure handled by the same code path.
+Failures are injected via a chaos layer wrapping the same source protocol as the real clients, so they're reproducible for testing and demonstration. The agent's response to them is not scripted — identical faults produce different decisions depending on the economics, as `flight_timeout` and `flight_timeout_valuable` show. Deutsche Bahn's outage during development was a genuine, uninjected failure handled by the same code path.
 
 ## The pricing priors
 

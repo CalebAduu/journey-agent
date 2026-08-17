@@ -42,7 +42,9 @@ from journey.domain import (
 )
 from journey.feasibility import RouteFeasibility
 from journey.fetch import PendingRegistry
+from journey.merge import CONFLICTED_CERTAINTY
 from journey.narrate import Narrator, PromptCache
+from journey.pricing import infer_cost
 from journey.sources.chaos import ChaosScenario, load_scenario
 from journey.sources.stubs import StubSource
 
@@ -58,11 +60,11 @@ REAL_ROUTE = (
 # flight_timeout_valuable needs a leg where flight is geometrically
 # plausible AND can plausibly beat coach - none of REAL_ROUTE's three
 # legs qualify (leg 1/3 exclude flight entirely; leg 2 is long enough
-# that flight's floor always exceeds coach - see flight_timeout_worthless).
+# that flight's floor always exceeds coach - see flight_timeout).
 AMSTERDAM_LEG = (Leg(origin="London", destination="Amsterdam", distance_km=360.0),)
 
 SCENARIO_ROUTES = {
-    "flight_timeout_worthless": REAL_ROUTE,
+    "flight_timeout": REAL_ROUTE,
     "flight_timeout_valuable": AMSTERDAM_LEG,
     "price_conflict": REAL_ROUTE,
     "inventory_gone": REAL_ROUTE,
@@ -130,6 +132,70 @@ def _fmt_minutes(minutes: float | None) -> str:
     return f"{hours}h{mins:02d}" if hours else f"{mins}min"
 
 
+def _fmt_money_range(low: Money | None, high: Money | None) -> str:
+    if low is None or high is None:
+        return "—"
+    if low.minor_units == high.minor_units:
+        return _fmt_money(low)
+    return f"{_fmt_money(low)}–{_fmt_money(high)}"
+
+
+def _cost_cell(strategy: Strategy, distance_km: float | None) -> str:
+    """Real money first, normalised score in brackets. A Wait has no
+    price of its own - it's a bet on what the pending source will quote -
+    so it shows that source's plausible interval, the same interval
+    scoring already used to compute best/worst case."""
+    score = f"({strategy.cost_score:.2f})" if strategy.cost_score is not None else ""
+
+    if strategy.kind is StrategyKind.WAIT:
+        if distance_km is None:
+            return f"— {score}".strip()
+        low, high = infer_cost(strategy.mode, distance_km)
+        return f"{_fmt_money_range(low, high)} {score}".strip()
+
+    if strategy.cost_low is None:
+        return f"— {score}".strip()
+
+    value = _fmt_money_range(strategy.cost_low, strategy.cost_high)
+    basis = f" [dim]{strategy.cost_basis}[/dim]" if strategy.cost_basis in ("inferred", "stale") else ""
+    return f"{value} {score}{basis}".strip()
+
+
+def _time_cell(strategy: Strategy) -> str:
+    """A Wait's expected_minutes is its own delay, not a journey time -
+    the pending source hasn't answered, so the resolved journey duration
+    genuinely isn't known yet and isn't invented here."""
+    score = f"({strategy.time_score:.2f})" if strategy.time_score is not None else ""
+    if strategy.kind is StrategyKind.WAIT:
+        delay = f"+{strategy.wait_seconds:.0f}s" if strategy.wait_seconds is not None else "—"
+        return f"{delay} {score}".strip()
+    return f"{_fmt_minutes(strategy.expected_minutes)} {score}".strip()
+
+
+def _certainty_cell(strategy: Strategy) -> str:
+    """The word comes from the RAW certainty, the bracketed number from
+    the normalised score. They can legitimately diverge: _score_batch
+    min-max normalises certainty across the candidate set, so a batch
+    whose lowest raw certainty is a Conflicted 0.50 maps that to 0.00 -
+    identical on screen to a genuine Unknown unless the real value is
+    shown alongside it."""
+    score = f"({strategy.certainty_score:.2f})" if strategy.certainty_score is not None else ""
+    raw = strategy.certainty
+    if raw is None:
+        return score or "—"
+    if strategy.cost_basis == "stale":
+        word = "stale"
+    elif raw >= 1.0:
+        word = "confirmed"
+    elif raw <= 0.0:
+        word = "unknown"
+    elif abs(raw - CONFLICTED_CERTAINTY) < 1e-9:
+        word = "conflicted"
+    else:
+        word = "partial"
+    return f"{word} {score}".strip()
+
+
 def _mode_row(mode: str, status, ranked: list[Strategy]) -> tuple[str, str, str, str]:
     if isinstance(status, NotApplicable):
         return (mode, "—", "—", f"[dim]NOT APPLICABLE — {status.reason}[/dim]")
@@ -183,8 +249,13 @@ def _print_leg_table(console: Console, decision) -> None:
 
 
 def _print_strategies(console: Console, decision) -> None:
+    """Real values lead, normalised scores follow in brackets, so the
+    trade-off is readable AND the weighted arithmetic stays auditable.
+    Reason moves to its own line under each row: with real prices and
+    durations in the cells, keeping it as a column wraps badly at 120
+    columns and squeezes the numbers it's meant to explain."""
     table = Table(title="Ranked strategies")
-    table.add_column("")
+    table.add_column("#")
     table.add_column("Kind")
     table.add_column("Mode")
     table.add_column("Cost")
@@ -192,14 +263,13 @@ def _print_strategies(console: Console, decision) -> None:
     table.add_column("Certainty")
     table.add_column("VOI")
     table.add_column("Total")
-    table.add_column("Reason")
+
+    distance_km = decision.leg_view.distance_km
+    reasons = []
 
     for i, s in enumerate(decision.ranked_strategies):
-        marker = "[bold green]*[/bold green]" if i == 0 else ""
+        label = f"[bold green]{i + 1}*[/bold green]" if i == 0 else str(i + 1)
         kind_label = f"wait {s.wait_seconds:.0f}s" if s.kind is StrategyKind.WAIT and s.wait_seconds is not None else s.kind.value
-        cost = f"{s.cost_score:.2f}" if s.cost_score is not None else "—"
-        time_ = f"{s.time_score:.2f}" if s.time_score is not None else "—"
-        certainty = f"{s.certainty_score:.2f}" if s.certainty_score is not None else "—"
         total = f"{s.total_score:.4f}" if s.total_score is not None else "—"
         voi = "—"
         reason = s.reason
@@ -207,13 +277,25 @@ def _print_strategies(console: Console, decision) -> None:
             # delta is meaningless once q has already zeroed the whole
             # product out - showing it next to q=0.00 reads as broken
             # arithmetic rather than "this branch never looks at it."
-            delta = "—" if s.voi_q == 0.0 else f"{s.voi_delta:.4f}"
-            voi = f"{s.voi_value:.4f} (p={s.voi_p:.2f} q={s.voi_q:.2f} delta={delta})"
+            delta = "—" if s.voi_q == 0.0 else f"{s.voi_delta:.3f}"
+            voi = f"{s.voi_value:.4f}\np={s.voi_p:.2f} q={s.voi_q:.2f} d={delta}"
             if s.voi_value == 0.0:
                 reason = "cannot beat current best at any plausible price"
-        table.add_row(marker, kind_label, s.mode, cost, time_, certainty, voi, total, reason)
+        reasons.append(f"{i + 1}. {reason}")
+        table.add_row(
+            label,
+            kind_label,
+            s.mode,
+            _cost_cell(s, distance_km),
+            _time_cell(s),
+            _certainty_cell(s),
+            voi,
+            total,
+        )
 
     console.print(table)
+    for line in reasons:
+        console.print(f"  [dim]{line}[/dim]")
 
 
 async def _run(args: argparse.Namespace) -> None:
