@@ -253,6 +253,14 @@ Failures are injected via a chaos layer wrapping the same source protocol as the
 - **Feasibility as belief, not boolean.** `RouteFeasibility` implements the physical and geometric layers of §5 (a small hardcoded exclusion list, and generalizable distance thresholds) - a false "infeasible" would silently and permanently eliminate a valid option, so the default is to call unless there's a concrete reason not to. The LLM-prior/belief-update layers described in §5 point 4 weren't built (see below); everything not explicitly excluded is just attempted.
 - **Failures as return values, not exceptions.** Every source's `fetch()` is contractually unable to raise - a timeout, a malformed response, an unexpected internal error all become an `Observation` carrying the right `SourceStatus`, never a crash. Costs a small amount of ceremony (a catch-all in every source); buys a harvest loop that never needs to guess whether a missing entry means "didn't respond" or "the whole run crashed."
 
+## Hard constraints vs. soft preferences
+
+The agent optimises a **weighted objective**, not a constrained one. Under `fastest`, time carries 70% of the weight, so a fast-but-expensive option wins and the cheaper alternative stays visible beside it with the trade-off legible. Run 3 is exactly that shape: flight commits at £180.00, while coach sits two rows below at £38.86 and `0.3000` — not hidden, just outranked, and you can read why straight off the row.
+
+What it does **not** support is a hard constraint — *fastest under £200* — where an option breaching the ceiling is removed from consideration before scoring rather than down-weighted. Today there is no way to express that: at `--max-cost 150` the £180 flight should never have been scored at all, and instead it would simply win.
+
+This is a deliberate scope decision rather than an oversight. A soft weight and a hard constraint act at different stages of the pipeline — scoring versus eligibility filtering — and I chose to build the reasoning layer thoroughly rather than half-build a constraint system alongside it. With more time I'd add `--max-cost` and `--arrive-by` as pre-scoring filters, including the case that makes constraints genuinely interesting: when a constraint eliminates every option, the agent has to say so honestly rather than return nothing or quietly relax the constraint. That failure mode is the same class of problem as the rest of this project — the difference between "no answer" and "no acceptable answer" is exactly the kind of distinction the type system here exists to keep separate.
+
 ## What's unfinished
 
 - Full VBB/BVG parsers were never built - only VBB's `/locations` endpoint was verified live; BVG was never queried.
@@ -260,7 +268,7 @@ Failures are injected via a chaos layer wrapping the same source protocol as the
 - The feasibility belief-update layer (§5 point 4 - LLM priors, updated from observations) wasn't built. Only the physical and geometric layers exist.
 - `Replan` is a same-leg mode swap (fly instead of coach), not a multi-leg reroute - it can't route around a leg entirely.
 - `AbandonLeg` records the choice but doesn't reconnect route topology - if a middle leg were abandoned, the next leg's origin wouldn't automatically adjust to wherever the journey actually ended up.
-- There's no arrival deadline, so nothing constrains or even tests "the journey takes too long" - `--preference fastest` is a scoring weight, not a cutoff. An `--arrive-by` flag that turned it into a hard constraint (reject or reroute strategies that blow the deadline, rather than just rank them lower) would be a genuinely good addition. Out of scope for this build.
+- No hard constraints: `--preference fastest` is a scoring weight, not a cutoff, and there's no `--max-cost` or `--arrive-by`. Nothing constrains or even tests "the journey takes too long" - see [Hard constraints vs. soft preferences](#hard-constraints-vs-soft-preferences) for why, and what adding them would involve.
 - `--live` and `--replay` are real, parsed CLI flags, but nothing in the current scenario wiring exercises the real-network path - every scenario uses stub sources throughout, for reasons explained in `cli.py`'s own module docstring (the one genuinely captured Transitous fixture isn't keyed the way `ResponseCache` would need to find it in replay mode).
 
 ## Tests
