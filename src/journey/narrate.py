@@ -26,6 +26,7 @@ import httpx
 
 from journey.agent import PlanRequest
 from journey.domain import (
+    Available,
     Conflicted,
     DecisionTrace,
     Empty,
@@ -81,6 +82,13 @@ Never calculate or state a numeric gap between two values (e.g. "10 minutes long
 are not reliable at this arithmetic and a wrong number is worse than no number. Compare options only in \
 words - cheaper, pricier, faster, slower - with no figure attached, unless that exact figure already \
 appears above as its own fact.
+
+You are also not reliable at judging which of two given numbers is bigger, so never work that out \
+yourself either. If a "#1 vs #2" comparison line is given above, it is the only source of truth for which \
+option is cheaper/pricier or faster/slower - use its exact words, and never state a direction it doesn't \
+give you. If no such line is given (for instance because the runner-up is abandoning the leg, which has no \
+price or duration to compare), make no cost or speed comparison at all - describe the chosen strategy on \
+its own, and don't reach into the source list for some other option to compare it against instead.
 
 The budget above is the agent's own time for waiting on slow sources to respond, measured in seconds. It \
 has nothing to do with how long the journey itself takes. Never compare a travel time (minutes or hours) \
@@ -173,10 +181,10 @@ class Narrator:
             raw = await self._call_llm(prompt)
             if raw is not None and raw.strip():
                 text = raw.strip()
-                if _is_narration_consistent(decision_trace.choice, text):
+                if _is_narration_consistent(decision_trace, text):
                     self.last_narration_source = "llm"
                     return text
-                logger.warning("LLM narration rejected: described a Wait decision as committed/committing")
+                logger.warning("LLM narration rejected: failed the Wait/committed or unauthorized-comparison check")
 
         self.last_narration_source = "template"
         return _template_narrate(decision_trace)
@@ -216,16 +224,34 @@ class Narrator:
         return text
 
 
-def _is_narration_consistent(choice: Strategy, narration: str) -> bool:
-    """A deterministic backstop, not another prompt tweak: verified live
-    across three separate prompt rewrites, the LLM kept describing an
-    accepted Wait as "committed to" the pending mode - backwards, and the
-    exact timeout/empty conflation this project exists to prevent, just
-    relocated into prose. Rather than keep tuning wording and hoping,
-    reject it outright - same principle as everywhere else here: don't
-    trust the probabilistic layer to self-police a distinction that
-    matters."""
-    return not (choice.kind is StrategyKind.WAIT and "commit" in narration.lower())
+def _is_narration_consistent(decision_trace: DecisionTrace, narration: str) -> bool:
+    """A deterministic backstop, not another prompt tweak. Two failure
+    modes verified live that repeated prompt rewrites reduced but never
+    fully eliminated: describing an accepted Wait as "committed" to the
+    pending mode, and freelancing a cost/speed comparison against a mode
+    outside the top-2 when no comparison fact was given to support one
+    (e.g. the runner-up is AbandonLeg, which has no price or duration).
+    Both are the same lesson relocated into prose - don't trust the
+    probabilistic layer to self-police a distinction that matters;
+    verify it, and fall back if it's wrong."""
+    choice = decision_trace.choice
+    lowered = narration.lower()
+
+    if choice.kind is StrategyKind.WAIT and "commit" in lowered:
+        return False
+
+    top_two = decision_trace.ranked_strategies[:2]
+    comparison_given = len(top_two) == 2 and _describe_relative_comparison(top_two[0], top_two[1]) is not None
+    if not comparison_given:
+        other_available_modes = {
+            mode
+            for mode, status in decision_trace.leg_view.results
+            if isinstance(status, Available) and mode != choice.mode
+        }
+        if any(mode in lowered for mode in other_available_modes):
+            return False
+
+    return True
 
 
 def _parse_json_object(raw: str) -> dict | None:
@@ -306,15 +332,8 @@ def _summarize_trace_for_prompt(decision_trace: DecisionTrace) -> str:
         lines.append("")
         lines.append("Unknown at the time each source was asked:")
         choice = decision_trace.choice
-        resolving_kinds = (StrategyKind.COMMIT, StrategyKind.USE_CACHED)
         for mode, reason in decision_trace.unknown_reasons:
-            note = ""
-            if choice.mode == mode and choice.kind in resolving_kinds:
-                # the agent waited, this source answered, and the final
-                # choice below is built on that answer - without this the
-                # facts would say "pending" right next to a Chosen line
-                # that commits to the very same mode
-                note = f" - resolved before the final decision: {_describe_strategy_for_prompt(choice)}"
+            note = " - no longer accurate by the final decision; see \"Chosen\" below" if _mode_was_resolved(choice, mode) else ""
             lines.append(f"- {mode}: {reason}{note}")
 
     conflicts = [(mode, status) for mode, status in decision_trace.leg_view.results if isinstance(status, Conflicted)]
@@ -326,8 +345,13 @@ def _summarize_trace_for_prompt(decision_trace: DecisionTrace) -> str:
 
     lines.append("")
     lines.append("Top strategies:")
-    for i, strategy in enumerate(decision_trace.ranked_strategies[:2], start=1):
+    top_two = decision_trace.ranked_strategies[:2]
+    for i, strategy in enumerate(top_two, start=1):
         lines.append(f"{i}. {_describe_strategy_for_prompt(strategy)}")
+    if len(top_two) == 2:
+        comparison = _describe_relative_comparison(top_two[0], top_two[1])
+        if comparison is not None:
+            lines.append(f"#1 vs #2, computed directly - use only this, do not judge it yourself: {comparison}.")
 
     lines.append("")
     lines.append(
@@ -341,6 +365,19 @@ def _summarize_trace_for_prompt(decision_trace: DecisionTrace) -> str:
     return "\n".join(lines)
 
 
+def _mode_was_resolved(choice: Strategy, mode: str) -> bool:
+    """True when the trace's frozen "still Unknown" fact for this mode is
+    stale by the time of the final choice - either the agent waited and
+    committed to this very mode once it resolved favorably, or the wait
+    resolved it as genuinely failed and the agent replanned onto a
+    different mode instead (both: act() actually waited for real and
+    re-scored - see agent.py's act()). Every reason string strategies.py
+    generates names the mode(s) it's about (commit/use_cached name their
+    own mode, replan names the one that failed), so this is a reliable,
+    general check without agent.py needing to record which branch fired."""
+    return choice.kind is not StrategyKind.WAIT and mode in choice.reason
+
+
 def _describe_conflict(status: Conflicted) -> str:
     parts = [f"{status.dimension} disagreement"]
     if status.price_low is not None:
@@ -351,6 +388,27 @@ def _describe_conflict(status: Conflicted) -> str:
         parts.append(f"{low_min:.0f}-{high_min:.0f}min")
     sources = ", ".join(sorted({o.source for o in status.observations}))
     return f"{', '.join(parts)} across {sources}"
+
+
+def _describe_relative_comparison(first: Strategy, second: Strategy) -> str | None:
+    """Computed once, in Python, so the LLM never has to judge which of
+    two numbers is bigger - observed live: it isn't reliable at this,
+    calling the same 600-minute option "acceptably fast" in one sample
+    and "acceptably slow" in another, compared to the same 480-minute
+    runner-up. Same fix as the earlier invented-arithmetic bug: don't
+    ask it to judge, hand over the answer as a fact."""
+    parts = []
+    if first.cost_low is not None and second.cost_low is not None:
+        if first.cost_low.minor_units < second.cost_low.minor_units:
+            parts.append("cheaper")
+        elif first.cost_low.minor_units > second.cost_low.minor_units:
+            parts.append("pricier")
+    if first.expected_minutes is not None and second.expected_minutes is not None:
+        if first.expected_minutes < second.expected_minutes:
+            parts.append("faster")
+        elif first.expected_minutes > second.expected_minutes:
+            parts.append("slower")
+    return ", ".join(parts) if parts else None
 
 
 def _describe_observation(obs: Observation) -> str:
@@ -380,11 +438,14 @@ def _template_narrate(decision_trace: DecisionTrace) -> str:
     choice = decision_trace.choice
     # unknown_reasons is frozen before act() runs, but choice reflects
     # whatever act() decided after - including a full re-score once a
-    # waited-on source resolves. Without this filter, a Wait-then-Commit
-    # leg would call its own chosen mode "unknown so far" one clause
-    # before committing to it.
-    resolved_mode = choice.mode if choice.kind in (StrategyKind.COMMIT, StrategyKind.USE_CACHED) else None
-    still_unknown = [(mode, reason) for mode, reason in decision_trace.unknown_reasons if mode != resolved_mode]
+    # waited-on source resolves, whether that resolves favorably (commit
+    # to the same mode) or as a genuine failure (replan onto another).
+    # Without this filter, a leg like that would call its own resolved
+    # mode "unknown so far" one clause before committing to or replanning
+    # around it.
+    still_unknown = [
+        (mode, reason) for mode, reason in decision_trace.unknown_reasons if not _mode_was_resolved(choice, mode)
+    ]
     if still_unknown:
         unknowns = ", ".join(f"{mode} ({reason})" for mode, reason in still_unknown)
         parts.append(f"unknown so far: {unknowns}.")

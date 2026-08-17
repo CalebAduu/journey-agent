@@ -503,10 +503,10 @@ def test_narrate_prompt_facts_note_when_the_choice_resolves_a_mode_still_listed_
 
     # the pending fact is still there
     assert "still pending in background after 3.0s" in facts
-    # but it must also say this specific mode went on to resolve before
-    # the final decision, not leave "pending" standing unqualified next
-    # to a Chosen line that commits to the very same mode
-    assert "resolved" in facts.lower()
+    # but it must also say this specific mode's status is stale by the
+    # final decision, not leave "pending" standing unqualified next to a
+    # Chosen line that commits to the very same mode
+    assert "no longer accurate" in facts.lower()
     assert "0.8213" in facts
 
 
@@ -554,6 +554,272 @@ def test_narrate_template_does_not_call_a_resolved_mode_unknown_next_to_committi
     # must not simultaneously call flight unknown right next to
     # committing to it - the mode resolved before the final decision
     assert "unknown" not in text.lower()
+
+
+def test_narrate_falls_back_to_template_when_llm_compares_against_a_mode_outside_the_top_two(tmp_path, monkeypatch):
+    """Observed live: when the runner-up is AbandonLeg (no price or
+    duration, so no "#1 vs #2" comparison fact is given), the LLM still
+    sometimes reaches into the raw source list and freelances a
+    cost/speed comparison against a mode ranked below #2 - and gets the
+    direction wrong ("pricier... but faster" for an option that was
+    actually cheaper and slower). ~1-in-4 fresh samples even with an
+    explicit instruction not to. Same backstop as the Wait/committed
+    guard: don't trust the probabilistic layer to self-police this."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    leg = Leg(origin="Berlin", destination="Potsdam", distance_km=25.0)
+    coach_obs = Observation(
+        source="stub-coach", mode="coach", status=SourceStatus.FRESH,
+        price=Money(3886, "GBP"), duration=timedelta(minutes=600),
+    )
+    rail_obs = Observation(
+        source="stub-rail", mode="rail", status=SourceStatus.FRESH,
+        price=Money(8901, "GBP"), duration=timedelta(minutes=480),
+    )
+    coach_choice = Strategy(
+        kind=StrategyKind.COMMIT, mode="coach", source="stub-coach",
+        reason="commit to stub-coach for coach",
+        cost_low=Money(3886, "GBP"), cost_high=Money(3886, "GBP"), cost_basis="observed",
+        expected_minutes=600.0, total_score=0.8000,
+    )
+    abandon = Strategy(
+        kind=StrategyKind.ABANDON_LEG, mode="*",
+        reason="journey remains viable without this leg", total_score=0.5500,
+    )
+    trace = DecisionTrace(
+        leg=leg,
+        decided_at=NOW,
+        observations=(coach_obs, rail_obs),
+        leg_view=LegView(
+            origin=leg.origin,
+            destination=leg.destination,
+            results=(
+                ("coach", Available(observations=(coach_obs,))),
+                ("flight", NotApplicable(reason="~25km, below the geometric threshold")),
+                ("rail", Available(observations=(rail_obs,))),
+            ),
+            distance_km=25.0,
+            abandonable=True,
+        ),
+        unknown_reasons=(),
+        ranked_strategies=(coach_choice, abandon),
+        choice=coach_choice,
+        budget_before=120.0,
+        budget_after=120.0,
+    )
+    call_count = [0]
+    bad_reply = "The coach is pricier than the rail alternative, but its higher score made it the clear choice."
+
+    async def run():
+        async with _make_llm_client(bad_reply, call_count) as http:
+            narrator = Narrator(clock=FakeClock(NOW), cache=PromptCache(tmp_path), http=http)
+            return await narrator.narrate(trace), narrator.last_narration_source
+
+    text, source = asyncio.run(run())
+
+    assert source == "template"
+    assert "rail" not in text.lower()
+    assert call_count[0] == 1
+
+
+def test_narrate_accepts_an_llm_response_with_no_comparison_when_none_was_given(tmp_path, monkeypatch):
+    """Same no-comparison-fact situation, but the LLM correctly describes
+    the choice on its own without reaching for an unlisted mode - must
+    not be rejected just because a runner-up without a price exists."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    leg = Leg(origin="Berlin", destination="Potsdam", distance_km=25.0)
+    coach_obs = Observation(
+        source="stub-coach", mode="coach", status=SourceStatus.FRESH,
+        price=Money(3886, "GBP"), duration=timedelta(minutes=600),
+    )
+    rail_obs = Observation(
+        source="stub-rail", mode="rail", status=SourceStatus.FRESH,
+        price=Money(8901, "GBP"), duration=timedelta(minutes=480),
+    )
+    coach_choice = Strategy(
+        kind=StrategyKind.COMMIT, mode="coach", source="stub-coach",
+        reason="commit to stub-coach for coach",
+        cost_low=Money(3886, "GBP"), cost_high=Money(3886, "GBP"), cost_basis="observed",
+        expected_minutes=600.0, total_score=0.8000,
+    )
+    abandon = Strategy(
+        kind=StrategyKind.ABANDON_LEG, mode="*",
+        reason="journey remains viable without this leg", total_score=0.5500,
+    )
+    trace = DecisionTrace(
+        leg=leg,
+        decided_at=NOW,
+        observations=(coach_obs, rail_obs),
+        leg_view=LegView(
+            origin=leg.origin,
+            destination=leg.destination,
+            results=(
+                ("coach", Available(observations=(coach_obs,))),
+                ("flight", NotApplicable(reason="~25km, below the geometric threshold")),
+                ("rail", Available(observations=(rail_obs,))),
+            ),
+            distance_km=25.0,
+            abandonable=True,
+        ),
+        unknown_reasons=(),
+        ranked_strategies=(coach_choice, abandon),
+        choice=coach_choice,
+        budget_before=120.0,
+        budget_after=120.0,
+    )
+    call_count = [0]
+    good_reply = "The agent committed to coach because it scored well ahead of abandoning the leg entirely."
+
+    async def run():
+        async with _make_llm_client(good_reply, call_count) as http:
+            narrator = Narrator(clock=FakeClock(NOW), cache=PromptCache(tmp_path), http=http)
+            return await narrator.narrate(trace), narrator.last_narration_source
+
+    text, source = asyncio.run(run())
+
+    assert source == "llm"
+    assert text == good_reply
+
+
+def test_narrate_prompt_facts_note_when_a_replan_resolves_a_mode_still_listed_as_unknown(tmp_path):
+    """Task #14 only covered Wait resolving favorably into a Commit on
+    the SAME mode. Reported live: when the wait resolves the source as
+    genuinely failed, act() replans onto a DIFFERENT mode instead - so
+    choice.mode never matches the pending mode, the earlier fix's
+    condition never fires, and the facts still say "flight: still
+    pending" right next to a Replan whose own reason already says
+    "flight failed via stub-flight". Same contradiction, different
+    branch of act()."""
+    leg = Leg(origin="London", destination="Berlin", distance_km=930.0)
+    flight_obs = Observation(
+        source="stub-flight", mode="flight", status=SourceStatus.TIMED_OUT,
+        detail="still pending in background after 3.0s",
+    )
+    replan_choice = Strategy(
+        kind=StrategyKind.REPLAN,
+        mode="rail",
+        reason="flight failed via stub-flight; rail is healthy and independent of it",
+        total_score=0.49,
+    )
+    trace = DecisionTrace(
+        leg=leg,
+        decided_at=NOW,
+        observations=(flight_obs,),
+        leg_view=LegView(
+            origin=leg.origin,
+            destination=leg.destination,
+            results=(("flight", Unknown(observations=(flight_obs,))),),
+        ),
+        unknown_reasons=(("flight", "still pending in background after 3.0s"),),
+        ranked_strategies=(replan_choice,),
+        choice=replan_choice,
+        budget_before=120.0,
+        budget_after=117.0,
+    )
+
+    facts = _summarize_trace_for_prompt(trace)
+
+    # the pending fact is still there
+    assert "still pending in background after 3.0s" in facts
+    # but flagged as stale, not left standing unqualified next to a
+    # Chosen line whose own reason says the source already failed
+    assert "no longer accurate" in facts.lower()
+
+
+def test_narrate_template_does_not_call_a_replanned_mode_unknown(tmp_path):
+    """Same bug, templated path: the "unknown so far" clause must not
+    call flight pending when the choice itself is a Replan that already
+    explains flight failed."""
+    leg = Leg(origin="London", destination="Berlin", distance_km=930.0)
+    flight_obs = Observation(
+        source="stub-flight", mode="flight", status=SourceStatus.TIMED_OUT,
+        detail="still pending in background after 3.0s",
+    )
+    replan_choice = Strategy(
+        kind=StrategyKind.REPLAN,
+        mode="rail",
+        reason="flight failed via stub-flight; rail is healthy and independent of it",
+        total_score=0.49,
+    )
+    trace = DecisionTrace(
+        leg=leg,
+        decided_at=NOW,
+        observations=(flight_obs,),
+        leg_view=LegView(
+            origin=leg.origin,
+            destination=leg.destination,
+            results=(("flight", Unknown(observations=(flight_obs,))),),
+        ),
+        unknown_reasons=(("flight", "still pending in background after 3.0s"),),
+        ranked_strategies=(replan_choice,),
+        choice=replan_choice,
+        budget_before=120.0,
+        budget_after=117.0,
+    )
+
+    narrator = Narrator(clock=FakeClock(NOW), cache=PromptCache(tmp_path), http=None, no_llm=True)
+    text = asyncio.run(narrator.narrate(trace))
+
+    assert "unknown" not in text.lower()
+    assert "Replanning via rail" in text
+
+
+def test_narrate_prompt_facts_precompute_the_direction_of_the_top_two_comparison(tmp_path):
+    """Reported live: across repeated samples of the same facts, the LLM
+    called the same 600min option "acceptably fast" in one run and
+    "acceptably slow" in another, compared to a 480min runner-up - it
+    isn't reliable at judging which of two given numbers is bigger, the
+    same class of problem as the earlier invented-arithmetic bug, just
+    one level simpler (direction instead of magnitude). Fix the same
+    way: don't ask it to judge, hand over the answer as a fact."""
+    leg = Leg(origin="Berlin", destination="Potsdam", distance_km=25.0)
+    coach_obs = Observation(
+        source="stub-coach", mode="coach", status=SourceStatus.FRESH,
+        price=Money(3886, "GBP"), duration=timedelta(minutes=600),
+    )
+    rail_obs = Observation(
+        source="stub-rail", mode="rail", status=SourceStatus.FRESH,
+        price=Money(8901, "GBP"), duration=timedelta(minutes=480),
+    )
+    coach_choice = Strategy(
+        kind=StrategyKind.COMMIT, mode="coach", source="stub-coach",
+        reason="commit to stub-coach for coach",
+        cost_low=Money(3886, "GBP"), cost_high=Money(3886, "GBP"), cost_basis="observed",
+        expected_minutes=600.0, total_score=0.8000,
+    )
+    rail_runner_up = Strategy(
+        kind=StrategyKind.COMMIT, mode="rail", source="stub-rail",
+        reason="commit to stub-rail for rail",
+        cost_low=Money(8901, "GBP"), cost_high=Money(8901, "GBP"), cost_basis="observed",
+        expected_minutes=480.0, total_score=0.3000,
+    )
+    trace = DecisionTrace(
+        leg=leg,
+        decided_at=NOW,
+        observations=(coach_obs, rail_obs),
+        leg_view=LegView(
+            origin=leg.origin,
+            destination=leg.destination,
+            results=(
+                ("coach", Available(observations=(coach_obs,))),
+                ("rail", Available(observations=(rail_obs,))),
+            ),
+            distance_km=25.0,
+        ),
+        unknown_reasons=(),
+        ranked_strategies=(coach_choice, rail_runner_up),
+        choice=coach_choice,
+        budget_before=120.0,
+        budget_after=120.0,
+    )
+
+    facts = _summarize_trace_for_prompt(trace)
+
+    # coach is cheaper (£38.86 < £89.01) and slower (600min > 480min)
+    # than rail - both directions given as facts, not left to be judged
+    assert "cheaper" in facts.lower()
+    assert "slower" in facts.lower()
+    assert "faster" not in facts.lower()
+    assert "pricier" not in facts.lower()
 
 
 def test_llm_response_is_cached_so_a_repeated_prompt_never_calls_the_network_again(tmp_path, monkeypatch):
