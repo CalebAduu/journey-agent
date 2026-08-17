@@ -29,6 +29,14 @@ The LLM is confined to the edges: parsing what the traveller asked for, and expl
 
 Two more scenarios worth running: `--scenario flight_timeout_valuable` (the same kind of failure as above, but where waiting genuinely pays off) and `--scenario price_conflict` (two sources disagree, both values kept). A fourth, `inventory_gone`, exists too. Preference defaults to `cheapest`; pass `--preference fastest` or `--preference reliable` to see the same failure produce a different winner.
 
+**The three runs the walkthrough covers**, in order — the arithmetic behind each is broken down in [The three demo runs, in numbers](#the-three-demo-runs-in-numbers):
+
+```bash
+python -m journey.cli --scenario flight_timeout --preference cheapest --replay
+python -m journey.cli --scenario inventory_gone --replay
+python -m journey.cli --scenario flight_timeout --preference fastest --replay
+```
+
 ## The core idea
 
 A source can fail in four structurally different ways, and the type system makes it impossible to write code that treats one as another:
@@ -44,22 +52,175 @@ These are five separate frozen dataclasses under a shared marker base with no fi
 
 `NotApplicable` never reduces the certainty score - knowing a mode is impossible is knowledge, not doubt. Only `Unknown` does.
 
-## How VOI works
+## How the numbers work
 
-`value_of_waiting = p × q × Δ`, compared against `cost_of_waiting`.
+Every component score is 0-1, higher is better, and `Total` is their weighted sum. The CLI prints the real value first and the normalised score in brackets - `£38.86 (1.00)` - so the arithmetic below can be checked directly off any row. Every figure in this section is taken from an actual `--seed 42 --replay` run, not worked out by hand.
 
-- **p** - probability the pending source responds in time. A Beta-Bernoulli prior (`ALPHA = BETA = 2.0`) updated from this session's own observed successes/failures per source. With no observations yet, `p = 2/(2+2) = 0.5`.
-- **q** - the fraction of the pending source's plausible outcome range that would actually beat the current best. Computed from `infer_cost()`'s low/high bounds scored through the same weighting as every other candidate, giving a best-case and worst-case total for the pending strategy. If even the best case can't beat the incumbent, `q = 0` outright - `p` and `Δ` never get multiplied in.
-- **Δ** - `best_case_score - incumbent_score`, in the same 0-1 weighted-score units as everything else being ranked.
+### The preference weights
 
-`cost_of_waiting = wait_seconds × VALUE_OF_TIME + DOWNSTREAM_SLACK_RISK_COEFFICIENT × (wait_seconds / remaining_budget)` - the second term is why the identical failure ranks `Wait` first on an early leg and `Commit` first later: the same wait costs more as the journey's remaining slack shrinks.
+`PREFERENCE_WEIGHTS` (`scoring.py`) is the whole of what `--preference` does:
 
-**Worked example, both taken from an actual run** (`--scenario flight_timeout` / `flight_timeout_valuable`, `--seed 42`):
+| Preference | cost | time | certainty |
+|---|---|---|---|
+| `cheapest` (default) | **0.7** | 0.2 | 0.1 |
+| `fastest` | 0.2 | **0.7** | 0.1 |
+| `reliable` | 0.1 | 0.2 | **0.7** |
 
-- London → Berlin (930km), flight pending: coach's incumbent score is `0.8000`. Flight's best plausible case scores `0.5058` - already below the incumbent - so `q = 0.0000` and `voi = 0.0000` exactly, regardless of `p`. The agent commits to coach without waiting.
-- London → Amsterdam (360km), same kind of failure, coach priced at its own high/peak bound instead of its floor: flight's best case now scores `1.0000` against an incumbent of `0.8000`. `p = 0.5000`, `q = 0.2857`, `Δ = 0.2000`, `voi = 0.0286` - small, but enough to beat `cost_of_waiting` at that leg's budget, so `Wait` ranks first and the agent holds.
+They appear in the CLI header and in the column titles (`Cost x0.7`), so the multiplier is never hidden. Certainty is deliberately never the dominant term under `cheapest` or `fastest`: it breaks ties and penalises guesses, but a traveller who asked for the cheapest option should still get it when the cheap option is well-evidenced.
 
-**The weakest link, stated plainly:** `q` assumes the pending source's real outcome is uniformly distributed between its worst and best plausible values. Real fare distributions aren't uniform - budget-carrier prices cluster near the floor with a long thin tail toward the expensive end, not spread evenly across the range. A production version would fit `q` from historical query logs instead of assuming a flat distribution between two hand-specified bounds.
+### Normalisation, and why it is necessary
+
+The three axes arrive in incompatible units: cost in pence, time in minutes, certainty already 0-1. Weighting and adding those directly is meaningless - `9234` pence would swamp `480` minutes purely because pence are smaller units, and the weights would express nothing. So each axis is **min-max normalised across the candidate set for that leg**, with cost and time negated first so that "higher score" always means "better".
+
+Three consequences worth stating plainly, because they surprise people reading the table:
+
+- **Scores are relative to the candidates on offer, not absolute.** `1.00` on cost means *cheapest of what is available on this leg*, not cheap. In `inventory_gone` leg 1, coach is `Empty` and flight is `NotApplicable`, leaving rail as the only candidate - so rail scores `1.00` on every axis and totals `1.0000` at £89.44, the most expensive fare in the whole run. A perfect score there means "only option", not "great deal".
+- **Missing values get a neutral 0.5**, neither rewarded nor punished. `Replan` carries no price of its own, so its cost cell reads `— (0.50)`. Same for a `Wait`, whose cost is not yet known.
+- **Adding a candidate re-scores every other candidate.** The range shifts, so all the fractions move. This is not a bug, but it does mean scores are only comparable within one leg's table.
+
+Worked, from `flight_timeout` leg 2 (London->Berlin) under `cheapest`. Cost values present in the batch are coach `3886p`, cached flight midpoint `7511.5p`, rail `9234p`:
+
+```
+negated:  coach -3886   cached -7511.5   rail -9234
+min = -9234, max = -3886, range = 5348
+
+coach   (-3886  + 9234) / 5348 = 1.00
+cached  (-7511.5 + 9234) / 5348 = 0.32
+rail    (-9234  + 9234) / 5348 = 0.00
+```
+
+and the winning row reconciles exactly:
+
+```
+commit coach = 0.7 x 1.00  +  0.2 x 0.00  +  0.1 x 1.00  =  0.8000
+commit rail  = 0.7 x 0.00  +  0.2 x 0.20  +  0.1 x 1.00  =  0.1400
+```
+
+### Certainty by state
+
+The `Certainty` column shows the word and the number, because `0.50` alone doesn't say *why*:
+
+| Shown | Value | State | Meaning |
+|---|---|---|---|
+| `confirmed` | **1.0** | `Available` | A source answered with usable data |
+| `confirmed` | **1.0** | `Empty` / `NotApplicable` | A definite answer, or a mode ruled out by design - both are knowledge, not doubt |
+| `partial` | **0.8** | `Available`, inferred price | The state is sound but the price is a distance estimate, not a quote |
+| `partial` | **0.7** | `Available` + disruption detail | Answered, but carrying a live disruption note (`DISRUPTION_CERTAINTY_PENALTY = 0.3`) |
+| `stale` | **0.6** | `UseCached` | `CACHED_BASE_CERTAINTY = 0.8` minus the `0.2` non-quote penalty |
+| `conflicted` | **0.5** | `Conflicted` | Two sources answered and disagree: a bounded interval, strictly more than nothing |
+| `unknown` | **0.0** | `Unknown` | Asked, no answer - the only state that actually reduces certainty |
+
+(`partial` is the catch-all label for any value strictly between the named tiers; the number beside it is always the real one.)
+
+Two of these are load-bearing for the thesis. `NotApplicable` sits at `1.0`: knowing Doncaster Sheffield Airport is closed is *information*, and docking certainty for it would punish the agent for knowing something. And `stale` at `0.6` does **not** inherit the certainty of the dead live source it is standing in for - a cached fare was a real quote when it was taken, and the situation where it is worth consulting is exactly the one where the live source just failed.
+
+An `inferred` or `stale` cost basis costs a flat `COST_BASIS_CERTAINTY_PENALTY = 0.2` on top of the state's own value, because the *price* is a guess even when the state is sound.
+
+### The cost priors — assumptions, not measurements
+
+`COST_PER_KM` and `MIN_FARE` (`pricing.py`) are **hand-specified, back-solved from a handful of known real fares**. They are not derived from fare data and should not be read as measurements:
+
+| Mode | £/km low | £/km high | Minimum fare |
+|---|---|---|---|
+| rail | 0.12 | 0.35 | £5.00 |
+| coach | 0.04 | 0.09 | £3.00 |
+| flight | 0.08 | 0.40 | £25.00 |
+
+The ranges are wide deliberately: UK rail on the same train varies roughly threefold on booking horizon alone, so a narrow prior would be confidently wrong more often than a wide one is uselessly vague. `infer_cost()` floors the low bound at `MIN_FARE` and raises the high bound to match if flooring would invert the interval. For the London->Berlin leg, `infer_cost("flight", 930)` gives **£74.40 - £372.00**, which is what the `Wait` rows display as flight's plausible range.
+
+### Asymmetric staleness drift
+
+`drift_cached()` treats a cached fare as a **floor, not a midpoint**, because fares ratchet upward toward departure as advance quotas sell out - a day-old quote is far more likely to be an underestimate than an overestimate.
+
+```
+STALENESS_DRIFT_PER_HOUR = 0.004     # ~10% over 24h, assumed, not measured
+MAX_CACHE_AGE_HOURS      = 72        # older than this, UseCached is not offered
+
+high = price x (1 + 0.004 x age_hours)
+```
+
+The `flight_timeout` scenario seeds a £71.40 flight price at 26 hours old, which is inside the 72-hour limit and drifts to:
+
+```
+£71.40 x (1 + 0.004 x 26) = £71.40 x 1.104 = £78.83
+```
+
+so the row reads `£71.40–£78.83 (0.32) 26h stale`. The interval is one-sided on purpose: the cached price is the best case, never the expected case.
+
+### VOI = p × q × Δ
+
+Waiting is only worth it if the information could actually change the decision. `voi()` (`scoring.py`) computes:
+
+- **p** — probability the pending source answers in time. A Beta-Bernoulli prior (`ALPHA = BETA = 2.0`) updated from this session's observed successes and failures for that source. With nothing observed yet, `p = 2/(2+2) = 0.5000`.
+- **q** — the fraction of the pending source's plausible outcome range that would actually beat the incumbent. Both bounds from `infer_cost()` are scored through the same weighted pipeline as every real candidate, giving `best_case_score` and `worst_case_score`; then `q = (best − incumbent) / (best − worst)`, clamped to `1.0` when even the worst case wins. **If the best case cannot beat the incumbent, `q = 0` and the whole product is exactly `0`, regardless of how likely a response is.**
+- **Δ** — `best_case_score − incumbent_score`, in the same 0-1 units as everything else being ranked.
+
+**The q = 0 case** — `flight_timeout` leg 2, `--preference cheapest`. Coach is confirmed at **£38.86**. Flight's cheapest plausible price is its **£74.40** floor — already nearly double coach — so even a perfect flight result loses:
+
+```
+incumbent (commit coach)  = 0.8000
+best_case  (flight @ £74.40)  = 0.5348      <- below the incumbent
+worst_case (flight @ £372.00) = 0.3000
+
+best_case < incumbent  ->  q = 0.0000
+VOI = 0.5000 x 0.0000 x (-0.2652) = 0.0000
+```
+
+The agent commits to coach immediately. This is the headline: it does not wait, and it does not need to see the flight price to know that. Note `Δ` is negative here and displayed as `—`, because once `q` has zeroed the product `Δ` is never read.
+
+**The q = 1 case** — the same leg, same failure, `--preference fastest`. Now time carries 0.7 and flight's two-hour journey is worth far more, so *both* bounds beat the incumbent:
+
+```
+incumbent (use_cached flight) = 0.4744
+best_case  (flight @ £74.40)  = 0.8671
+worst_case (flight @ £372.00) = 0.8000     <- still above the incumbent
+
+worst_case >= incumbent  ->  q = 1.0000
+VOI = 0.5000 x 1.0000 x 0.3927 = 0.1963
+```
+
+**The weakest link, stated plainly:** `q` assumes the outcome is uniformly distributed between the two bounds. Real fare distributions are not uniform — budget-carrier prices cluster near the floor with a long thin tail upward. A production version would fit `q` from historical query logs rather than assuming a flat distribution between two hand-set bounds.
+
+### Why Wait is scored differently
+
+Every other strategy gets the weighted sum. A `Wait` instead gets:
+
+```
+Total = best non-wait total  +  VOI  -  cost_of_waiting
+```
+
+The reason is double-counting. VOI is *already* an expected improvement measured in these same weighted score units — it was produced by running hypothetical outcomes through the identical pipeline. Feeding it back through the weights would count the same benefit twice. So a `Wait` is scored as "what I have now, plus what asking might gain, minus what asking costs".
+
+```
+cost_of_waiting = wait_seconds x VALUE_OF_TIME
+                + DOWNSTREAM_SLACK_RISK_COEFFICIENT x (wait_seconds / remaining_budget)
+
+VALUE_OF_TIME = 0.002        DOWNSTREAM_SLACK_RISK_COEFFICIENT = 0.05
+```
+
+The second term is why the *same* pending failure ranks `Wait` first early in a journey and `Commit` first later: an identical wait costs more as the remaining budget shrinks. Both leg-2 wait rows reconcile:
+
+```
+wait 3s (cheapest) = 0.8000 + 0.0000 - (3 x 0.002 + 0.05 x 3/120)  = 0.7927
+wait 8s (cheapest) = 0.8000 + 0.0000 - (8 x 0.002 + 0.05 x 8/120)  = 0.7807
+wait 3s (fastest)  = 0.4744 + 0.1963 - 0.00725                      = 0.6635
+```
+
+Because this formula differs, the CLI prints a legend under every table naming the exception — otherwise a reviewer checking a `Wait` row against the column weights would correctly conclude the arithmetic was broken.
+
+### The three demo runs, in numbers
+
+**1. `--scenario flight_timeout --preference cheapest`** — *information that cannot change the decision is worth nothing.*
+
+Leg 1 (Sheffield->London) is the quiet baseline: coach £38.28 wins at `0.8000`, flight is `NOT APPLICABLE` because Doncaster Sheffield Airport is closed — a hardcoded physical exclusion, and one that costs no certainty. Leg 2 is the point of the whole project: flight times out, and the agent ranks two `Wait` options **below** committing, because `q = 0`. The `cached` row appears here too, at `£71.40–£78.83 (0.32) 26h stale`, scoring `0.3855` — real information, correctly discounted, still not competitive. Leg 3 offers `abandon_leg` at `0.5500` (Berlin->Potsdam is the one abandonable leg) and coach still wins at `0.8000`.
+
+**2. `--scenario inventory_gone`** — *empty is not the same as unknown.*
+
+Leg 1: coach comes back `EMPTY` — the source answered, and the answer was "nothing available". Certainty stays at `1.0`, because a definite "no" is knowledge. Flight is `NOT APPLICABLE`. Rail is the only candidate left and totals `1.0000` at £89.44 — the relative-normalisation point above, made concrete. Had coach instead *timed out*, it would be `UNKNOWN` at certainty `0.0` and the agent would have had a live `Wait` decision to make. Same visible outcome on the surface, entirely different epistemic state, and the type system keeps them apart.
+
+**3. `--scenario flight_timeout --preference fastest`** — *the same failure, a different answer.*
+
+Nothing about the world changed: identical scenario, identical seed, identical injected timeout. Only the weights moved. Leg 1 flips from coach to **rail** (`0.8000` vs coach's `0.3000` — the exact mirror of run 1). Leg 2 flips harder: `wait 3s` now ranks **first** at `0.6635`, because with time weighted at 0.7 the flight's two-hour journey means even its worst plausible price beats the incumbent, so `q` goes from `0.0000` to `1.0000` and VOI from `0.0000` to `0.1963`. The agent genuinely waits, and the budget drops `120.0s -> 117.0s`. That budget spend is the honest cost of the decision, and it is the only thing in the run that consumes it.
 
 ## Sources: what's real and what isn't
 
@@ -72,10 +233,6 @@ These are five separate frozen dataclasses under a shared marker base with no fi
 ## Chaos injection
 
 Failures are injected via a chaos layer wrapping the same source protocol as the real clients, so they're reproducible for testing and demonstration. The agent's response to them is not scripted — identical faults produce different decisions depending on the economics, as `flight_timeout` and `flight_timeout_valuable` show. Deutsche Bahn's outage during development was a genuine, uninjected failure handled by the same code path.
-
-## The pricing priors
-
-`COST_PER_KM` and `MIN_FARE` (`pricing.py`) are hand-specified, not derived from fare data - back-solved from a handful of known real fares rather than measured systematically. The ranges are wide on purpose: UK rail on the same train can vary roughly threefold depending on booking horizon alone, so a narrow prior would be confidently wrong more often than a wide one is uselessly vague. In production these would come from historical per-route fare observations instead of hand-set bounds.
 
 ## Design decisions, with trade-offs
 
@@ -100,7 +257,7 @@ Failures are injected via a chaos layer wrapping the same source protocol as the
 python -m pytest
 ```
 
-71 tests across 13 files, no network in any test's hot path. The two that matter most (`tests/test_scoring.py`):
+88 tests across 13 files, no network in any test's hot path. The two that matter most (`tests/test_scoring.py`):
 
 - `test_wait_ranks_last_with_voi_zero_when_it_cannot_beat_current_best` - proves VOI returns exactly `0.0` when even the best plausible outcome can't beat the incumbent, regardless of how likely a response is.
 - `test_wait_ranks_above_commit_when_it_plausibly_can_beat_current_best` - proves `Wait` outranks `Commit` when the numbers say it should.
