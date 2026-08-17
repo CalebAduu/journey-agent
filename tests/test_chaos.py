@@ -31,6 +31,17 @@ def test_parse_directive(text, expected):
     assert parse_directive(text) == expected
 
 
+def test_slow_takes_an_optional_price_factor():
+    """"Arrives late, and at this price" is a single real-world fault -
+    a slow source still returns a fare. Without the factor there was no
+    way to inject a late response at a chosen price, so the only late
+    responses available were whatever the stub's base price happened to
+    be."""
+    assert parse_directive("slow(5)") == Slow(5.0)
+    assert parse_directive("slow(5)").factor == 1.0
+    assert parse_directive("slow(5, 2.42)") == Slow(5.0, 2.42)
+
+
 def test_parse_directive_rejects_unrecognised_text():
     with pytest.raises(ValueError):
         parse_directive("not-a-real-directive")

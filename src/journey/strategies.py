@@ -49,7 +49,7 @@ def generate(leg_view: LegView, registry: PendingRegistry, budget: float, cache:
             strategies.extend(_wait_strategies(mode, status, registry, budget))
             strategies.extend(_replan_strategies(mode, status, leg_view))
 
-        strategies.extend(_use_cached_strategy(mode, cache, leg_view))
+        strategies.extend(_use_cached_strategy(mode, cache, leg_view, status))
 
     if leg_view.abandonable:
         strategies.append(
@@ -139,7 +139,20 @@ def _replan_strategies(mode: str, status: Unknown, leg_view: LegView) -> list[St
     return strategies
 
 
-def _use_cached_strategy(mode: str, cache: CacheLookup, leg_view: LegView) -> list[Strategy]:
+def _use_cached_strategy(mode: str, cache: CacheLookup, leg_view: LegView, status) -> list[Strategy]:
+    """A cached fare is a fallback for not having a live one, so it is
+    not offered once this mode has an actionable live price.
+
+    Beyond being redundant, offering both is actively wrong: a UseCached
+    strategy carries no source of its own, and scoring._expected_minutes
+    matches any observation when source is None - so alongside a live
+    observation the cached strategy picks up that observation's duration
+    and competes as yesterday's price paired with today's journey time.
+    Observed doing exactly that, and winning.
+    """
+    if any(o.actionable_for_cost() for o in getattr(status, "observations", ())):
+        return []
+
     entry = cache.get(leg_view.origin, leg_view.destination, mode)
     if entry is None:
         return []

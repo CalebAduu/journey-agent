@@ -392,6 +392,25 @@ async def _run(args: argparse.Namespace) -> None:
         for decision in journey_plan.trace:
             _print_leg_table(console, decision)
             _print_strategies(console, decision, weights)
+            # The ranked table above is the PRE-wait picture. If a wait was
+            # taken and the source answered, that arrival and the re-rank
+            # it triggered are the reason the committed strategy differs
+            # from row 1 - without showing it, the commit looks unexplained.
+            resolved = decision.resolved_observation
+            if resolved is not None:
+                arrived = ", ".join(
+                    part for part in (
+                        _fmt_money(resolved.price) if resolved.price is not None else None,
+                        _fmt_minutes(resolved.duration.total_seconds() / 60) if resolved.duration else None,
+                    ) if part
+                ) or resolved.status.value
+                via = f" via {decision.choice.source}" if decision.choice.source else ""
+                console.print(
+                    f"[bold yellow]Waited:[/bold yellow] {resolved.source} answered {arrived}"
+                    f" -> re-ranked -> {decision.choice.kind.value} "
+                    f"[bold]{decision.choice.mode}[/bold]{via}"
+                )
+
             narration = await narrator.narrate(decision)
             console.print(
                 f"[bold]Action:[/bold] [dim]\\[narration: {narrator.last_narration_source}][/dim] {narration}"

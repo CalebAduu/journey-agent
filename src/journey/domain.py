@@ -179,6 +179,12 @@ class DecisionTrace:
     choice: Strategy                                     # what was actually committed to, after acting on the top choice
     budget_before: float
     budget_after: float
+    # Set only when a Wait was acted on and the pending source actually
+    # answered. observations/leg_view above are frozen BEFORE act() runs,
+    # so without this the trace records a choice built on evidence it
+    # doesn't contain - and anything reading it describes a commit to a
+    # mode the trace still shows as pending.
+    resolved_observation: Observation | None = None
 
 
 @dataclass(frozen=True)

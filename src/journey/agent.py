@@ -101,7 +101,7 @@ async def _decide_leg(
         budget=budget.remaining,
     )
 
-    choice = await act(observations, ranked, leg, registry, budget, request, on_wait_tick)
+    choice, resolved = await act(observations, ranked, leg, registry, budget, request, on_wait_tick)
 
     return DecisionTrace(
         leg=leg,
@@ -113,6 +113,7 @@ async def _decide_leg(
         choice=choice,
         budget_before=budget_before,
         budget_after=budget.remaining,
+        resolved_observation=resolved,
     )
 
 
@@ -124,8 +125,14 @@ async def act(
     budget: TimeBudget,
     request: PlanRequest,
     on_wait_tick: Callable[[str, float, float], None] | None = None,
-) -> Strategy:
-    """Commit/UseCached/Replan/AbandonLeg: no spend, the top choice
+) -> tuple[Strategy, Observation | None]:
+    """Returns (chosen strategy, the observation that landed during a
+    wait or None). The second element exists because the caller freezes
+    observations/leg_view before this runs: when a wait resolves, the
+    arrival is the evidence the final choice rests on, and without
+    returning it the trace would record the consequence but not the cause.
+
+    Commit/UseCached/Replan/AbandonLeg: no spend, the top choice
     stands as-is - Replan and AbandonLeg both just get recorded, since
     this project's Replan is a same-leg mode swap (not a multi-leg
     reroute) and needs no further machinery here (see README).
@@ -140,18 +147,18 @@ async def act(
     again, commit the best available from the ORIGINAL ranking.
     """
     if not ranked:
-        return _no_strategy_choice(leg)
+        return _no_strategy_choice(leg), None
 
     top = ranked[0]
     if top.kind is not StrategyKind.WAIT:
-        return top
+        return top, None
 
     budget.spend(top.wait_seconds)
     tick = (lambda elapsed, total: on_wait_tick(top.source, elapsed, total)) if on_wait_tick else None
     try:
         new_observation = await registry.wait_for(top.source, top.wait_seconds, on_tick=tick)
     except TimeoutError:
-        return next((s for s in ranked if s.kind is not StrategyKind.WAIT), top)
+        return next((s for s in ranked if s.kind is not StrategyKind.WAIT), top), None
 
     updated_observations = tuple(
         new_observation if o.source == top.source else o for o in observations
@@ -167,8 +174,8 @@ async def act(
     )
     best = next((s for s in new_ranked if s.kind is not StrategyKind.WAIT), None)
     if best is not None:
-        return best
-    return new_ranked[0] if new_ranked else _no_strategy_choice(leg)
+        return best, new_observation
+    return (new_ranked[0] if new_ranked else _no_strategy_choice(leg)), new_observation
 
 
 def _unknown_reasons(leg_view) -> tuple[tuple[str, str], ...]:

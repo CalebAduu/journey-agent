@@ -1,13 +1,30 @@
-# Real 3-leg route, leg 2 (London -> Berlin, 930km). Flight times out
-# and is genuinely still pending - but even at its cheapest plausible
-# price (infer_cost's floor for 930km), it can't beat coach's actual
-# price. VOI = 0 exactly; the agent correctly declines to wait.
+# Real 3-leg route, leg 2 (London -> Berlin, 930km). Flight misses the
+# 3s harvest deadline and is genuinely still pending, so it merges as
+# Unknown and a Wait is offered. What happens next depends entirely on
+# the preference, which is the point of the scenario:
+#
+#   --preference cheapest : even flight's cheapest plausible price
+#       (infer_cost's GBP74.40 floor at 930km) can't beat coach's actual
+#       GBP38.86. VOI = 0 exactly, the agent declines to wait, and the
+#       eventual flight price below is never even observed.
+#   --preference fastest  : time carries 0.7, so flight's 2h beats
+#       coach's 10h decisively. VOI > 0, the agent waits, the price
+#       below actually lands, and the re-rank commits to flight.
+#
+# slow(5, 2.4194), not timeout(3): a timeout returns no price at all, so
+# the wait could only ever resolve to "still nothing" and replan - the
+# agent would spend budget and learn nothing, which tells the opposite
+# of the story under fastest. slow() answers late and for real. 5s clears
+# the 3s harvest deadline while still landing inside the 3s wait window.
+# The factor puts the fare at exactly GBP180.00 (base GBP74.40 x 2.4194):
+# pricier than coach, so it correctly loses under cheapest, and wins
+# under fastest on the merits rather than on being cheap.
 name: flight_timeout
 directives:
   - source: stub-flight
     origin: London
     destination: Berlin
-    directive: "timeout(3)"
+    directive: "slow(5, 2.4194)"
 
 # A flight price stored by an earlier query, on the same leg where the
 # live flight source now times out - the realistic UseCached case: the

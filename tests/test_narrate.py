@@ -846,3 +846,72 @@ def test_llm_response_is_cached_so_a_repeated_prompt_never_calls_the_network_aga
     assert call_count[0] == 1  # second call served entirely from disk cache
     assert first.preference == second.preference == "reliable"
     assert list(tmp_path.glob("*.txt"))  # the cache actually wrote to disk
+
+
+def _wait_resolved_trace():
+    """London->Berlin: flight missed the harvest deadline, the agent
+    waited, and the flight then landed at £180.00 and won the re-rank."""
+    leg = Leg(origin="London", destination="Berlin", distance_km=930.0)
+    pending = Observation(
+        source="stub-flight", mode="flight", status=SourceStatus.TIMED_OUT,
+        detail="still pending in background after 3.0s",
+    )
+    coach = Observation(
+        source="stub-coach", mode="coach", status=SourceStatus.FRESH,
+        price=Money(3886, "GBP"), duration=timedelta(hours=10),
+    )
+    arrived = Observation(
+        source="stub-flight", mode="flight", status=SourceStatus.FRESH,
+        price=Money(18000, "GBP"), duration=timedelta(hours=2),
+    )
+    committed = Strategy(
+        kind=StrategyKind.COMMIT, mode="flight", source="stub-flight",
+        reason="commit to stub-flight for flight",
+        cost_low=Money(18000, "GBP"), cost_high=Money(18000, "GBP"),
+        cost_basis="observed", expected_minutes=120.0, total_score=0.8000,
+    )
+    waited = Strategy(
+        kind=StrategyKind.WAIT, mode="flight", source="stub-flight",
+        reason="stub-flight is still pending, worth waiting 3s more",
+        wait_seconds=3.0, total_score=0.6635,
+        voi_value=0.1963, voi_p=0.5, voi_q=1.0, voi_delta=0.3927,
+    )
+    return DecisionTrace(
+        leg=leg,
+        decided_at=NOW,
+        observations=(coach, pending),
+        leg_view=LegView(
+            origin=leg.origin, destination=leg.destination,
+            results=(("coach", Available(observations=(coach,))),
+                     ("flight", Unknown(observations=(pending,)))),
+            distance_km=930.0,
+        ),
+        unknown_reasons=(("flight", "still pending in background after 3.0s"),),
+        ranked_strategies=(waited, committed),
+        choice=committed,
+        budget_before=120.0,
+        budget_after=117.0,
+        resolved_observation=arrived,
+    )
+
+
+def test_narrate_prompt_facts_report_what_arrived_during_the_wait(tmp_path):
+    facts = _summarize_trace_for_prompt(_wait_resolved_trace())
+
+    # the arrival, with its real price, as its own fact
+    assert "180.00" in facts
+    assert "arrived" in facts.lower()
+    # and the pending line must not still read as the current truth
+    assert "no longer accurate" in facts.lower()
+
+
+def test_narrate_template_describes_only_the_final_committed_strategy(tmp_path):
+    """The templated path must not say the flight is pending in one
+    clause and commit to it in the next - it describes the arrival and
+    the commitment that followed, and nothing else."""
+    narrator = Narrator(clock=FakeClock(NOW), cache=PromptCache(tmp_path), http=None, no_llm=True)
+    text = asyncio.run(narrator.narrate(_wait_resolved_trace()))
+
+    assert "unknown" not in text.lower()
+    assert "£180.00" in text
+    assert "Committing to flight" in text

@@ -95,6 +95,11 @@ has nothing to do with how long the journey itself takes. Never compare a travel
 to the budget (seconds), and never describe a journey as fitting "within the budget" - that comparison \
 doesn't mean anything.
 
+If an "Arrived during the wait" line is present, the agent waited and the source answered. Describe that \
+sequence and the final choice only: what arrived, and what the agent committed to as a result. The pending \
+status above it is history, not the current state - never present that mode as still unresolved, and never \
+describe the agent as committing to two different modes.
+
 If the strategy under "Chosen" has kind "wait": the agent has decided only to wait longer for that source \
 to respond. It has NOT chosen, picked, or selected that source's mode, and nothing about it is booked, \
 confirmed, or committed - there is no result yet to commit to. Say only that the agent is waiting or \
@@ -336,6 +341,15 @@ def _summarize_trace_for_prompt(decision_trace: DecisionTrace) -> str:
             note = " - no longer accurate by the final decision; see \"Chosen\" below" if _mode_was_resolved(choice, mode) else ""
             lines.append(f"- {mode}: {reason}{note}")
 
+    resolved = decision_trace.resolved_observation
+    if resolved is not None:
+        lines.append("")
+        lines.append(
+            f"Arrived during the wait: {resolved.source} ({resolved.mode}) "
+            f"{_describe_observation(resolved)}. The final choice below is built on this, "
+            f"not on the pending status above."
+        )
+
     conflicts = [(mode, status) for mode, status in decision_trace.leg_view.results if isinstance(status, Conflicted)]
     if conflicts:
         lines.append("")
@@ -449,6 +463,10 @@ def _template_narrate(decision_trace: DecisionTrace) -> str:
     if still_unknown:
         unknowns = ", ".join(f"{mode} ({reason})" for mode, reason in still_unknown)
         parts.append(f"unknown so far: {unknowns}.")
+
+    resolved = decision_trace.resolved_observation
+    if resolved is not None:
+        parts.append(f"Waited, and {resolved.source} answered: {_describe_observation(resolved)}.")
 
     parts.append(_describe_choice(choice))
     return " ".join(parts)

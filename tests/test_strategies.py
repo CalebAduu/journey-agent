@@ -190,3 +190,47 @@ def test_use_cached_carries_its_age_and_asymmetric_drift_interval():
     assert cached.cost_low == Money(7140, "GBP")
     assert cached.cost_high.minor_units > cached.cost_low.minor_units
     assert cached.cost_basis == "stale"
+
+
+def test_no_use_cached_once_the_mode_has_a_live_price():
+    """A cached fare is a fallback for not having a live one. Observed:
+    after a wait resolved, the mode had a fresh £180 quote AND the
+    26h-old cached price was still offered - and the cached strategy won,
+    because with source=None it also inherited the *live* observation's
+    duration. That pairs yesterday's price with today's journey time, an
+    option that exists nowhere, and beats the real quote on the strength
+    of it.
+    """
+    live = Observation(
+        source="stub-flight", mode="flight", status=SourceStatus.FRESH,
+        price=Money(18000, "GBP"), duration=timedelta(hours=2),
+    )
+    leg_view = LegView(
+        origin="London",
+        destination="Berlin",
+        results=(("flight", Available(observations=(live,))),),
+        distance_km=930.0,
+    )
+    cache = FakeCache({("London", "Berlin", "flight"): (Money(7140, "GBP"), 26.0)})
+
+    strategies = generate(leg_view, EMPTY_REGISTRY, budget=300.0, cache=cache)
+
+    assert not any(s.kind is StrategyKind.USE_CACHED for s in strategies)
+    assert any(s.kind is StrategyKind.COMMIT and s.mode == "flight" for s in strategies)
+
+
+def test_use_cached_still_offered_when_the_mode_has_no_live_price():
+    """The converse: a timed-out mode has no live price, so the cached
+    one is exactly what UseCached is for."""
+    timed_out = Observation(source="stub-flight", mode="flight", status=SourceStatus.TIMED_OUT)
+    leg_view = LegView(
+        origin="London",
+        destination="Berlin",
+        results=(("flight", Unknown(observations=(timed_out,))),),
+        distance_km=930.0,
+    )
+    cache = FakeCache({("London", "Berlin", "flight"): (Money(7140, "GBP"), 26.0)})
+
+    strategies = generate(leg_view, EMPTY_REGISTRY, budget=300.0, cache=cache)
+
+    assert any(s.kind is StrategyKind.USE_CACHED for s in strategies)

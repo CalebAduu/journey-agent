@@ -43,10 +43,18 @@ class PriceShift(ChaosDirective):
 
 @dataclass(frozen=True)
 class Slow(ChaosDirective):
+    """Answers, but late - and optionally at a shifted price. The factor
+    exists because "arrives after the deadline, at this fare" is a single
+    real fault: a slow source still returns a number, and which number it
+    returns is what decides whether the wait was worth it."""
+
     seconds: float
+    factor: float = 1.0
 
 
-_DIRECTIVE_PATTERN = re.compile(r"^(?P<name>\w+)(\((?P<arg>-?[0-9.]+)\))?$")
+_DIRECTIVE_PATTERN = re.compile(
+    r"^(?P<name>\w+)(\(\s*(?P<arg>-?[0-9.]+)\s*(,\s*(?P<arg2>-?[0-9.]+)\s*)?\))?$"
+)
 
 _NAMES = {
     "ok": Ok,
@@ -66,7 +74,11 @@ def parse_directive(text: str) -> ChaosDirective:
     if directive_cls in (Timeout, PriceShift, Slow):
         if match.group("arg") is None:
             raise ValueError(f"directive {text!r} requires a numeric argument")
+        if directive_cls is Slow and match.group("arg2") is not None:
+            return Slow(float(match.group("arg")), float(match.group("arg2")))
         return directive_cls(float(match.group("arg")))
+    if match.group("arg") is not None:
+        raise ValueError(f"directive {text!r} takes no argument")
     return directive_cls()
 
 

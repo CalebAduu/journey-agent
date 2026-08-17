@@ -7,11 +7,14 @@ waiting gets more expensive as the remaining budget shrinks.
 """
 
 import asyncio
+import random
 from datetime import UTC, datetime, timedelta
 
 from journey.agent import PlanRequest, TimeBudget, act, plan
 from journey.domain import Leg, Money, Observation, SourceStatus, Strategy, StrategyKind
 from journey.fetch import PendingRegistry
+from journey.sources.chaos import ChaosScenario, Slow
+from journey.sources.stubs import StubSource
 
 
 class FakeClock:
@@ -23,6 +26,18 @@ class FakeClock:
 
     async def sleep(self, seconds: float) -> None:
         pass
+
+
+class RealSleepClock:
+    """FakeClock's sleep is a no-op, which makes a Slow directive return
+    instantly - useless for testing a source that must still be pending
+    at the harvest deadline. This one actually sleeps, in tenths."""
+
+    def now(self) -> datetime:
+        return datetime.now(UTC)
+
+    async def sleep(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
 
 
 class AllFeasible:
@@ -177,8 +192,9 @@ def test_wait_that_never_resolves_falls_back_to_best_available():
         )
         observations = [Observation(source="stub-flight", mode="flight", status=SourceStatus.TIMED_OUT)]
 
-        choice = await act(observations, ranked, leg, registry, budget, request)
+        choice, resolved = await act(observations, ranked, leg, registry, budget, request)
         never_task.cancel()
+        assert resolved is None  # the wait never resolved, so nothing landed
         return choice, budget
 
     choice, budget = asyncio.run(run())
@@ -241,3 +257,55 @@ def test_same_failure_ranks_wait_at_leg_two_and_commit_at_leg_three():
     assert journey_plan.trace[0].ranked_strategies[0].kind is StrategyKind.WAIT
     assert journey_plan.trace[1].ranked_strategies[0].kind is StrategyKind.COMMIT
     assert journey_plan.trace[1].budget_before < journey_plan.trace[0].budget_before
+
+
+def test_trace_records_the_observation_that_landed_during_a_wait():
+    """DecisionTrace.observations/leg_view are frozen before act() runs,
+    so when a wait actually resolves, nothing in the trace said what
+    arrived - only that the choice had changed. Both the CLI's post-wait
+    line and the narrator need the arrival itself, not just its
+    consequence, or they describe a commit to a mode the trace still
+    shows as pending.
+    """
+
+    async def run():
+        leg = Leg(origin="London", destination="Berlin", distance_km=930.0)
+        scenario = ChaosScenario(
+            name="late-flight",
+            directives={("stub-flight", "London", "Berlin"): Slow(0.15, 2.4194)},
+        )
+        clock = RealSleepClock()
+        sources = [
+            StubSource(
+                name="stub-coach", mode="coach", base_price=Money(3886, "GBP"),
+                base_duration=timedelta(hours=10), scenario=scenario,
+                rng=random.Random(1), clock=clock,
+            ),
+            StubSource(
+                name="stub-flight", mode="flight", base_price=Money(7440, "GBP"),
+                base_duration=timedelta(hours=2), scenario=scenario,
+                rng=random.Random(2), clock=clock,
+            ),
+        ]
+        registry = PendingRegistry()
+        request = PlanRequest(
+            legs=(leg,),
+            preference="fastest",
+            budget_seconds=300.0,
+            feasibility=AllFeasible(["coach", "flight"]),
+            cache=EmptyCache(),
+            harvest_timeout_seconds=0.05,  # flight still pending at the deadline
+        )
+        return await plan(request, sources, registry, clock)
+
+    journey_plan = asyncio.run(run())
+    decision = journey_plan.trace[0]
+
+    # the wait was taken and the flight genuinely landed
+    assert decision.resolved_observation is not None
+    assert decision.resolved_observation.source == "stub-flight"
+    assert decision.resolved_observation.status is SourceStatus.FRESH
+    assert decision.resolved_observation.price == Money(18000, "GBP")
+    # and the final choice is built on it, not on the stale pending view
+    assert decision.choice.kind is StrategyKind.COMMIT
+    assert decision.choice.mode == "flight"

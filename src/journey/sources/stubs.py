@@ -79,7 +79,9 @@ class StubSource:
             return self._ok(factor=directive.factor, jitter=False)
         if isinstance(directive, Slow):
             await self.clock.sleep(directive.seconds)
-            return self._ok()
+            # A shifted late price is the whole point of the fault, so it
+            # must be exact - jitter would blur the number the demo names.
+            return self._ok(factor=directive.factor, jitter=directive.factor == 1.0)
         return Observation(
             source=self.name,
             mode=self.mode,
