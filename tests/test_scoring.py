@@ -174,3 +174,66 @@ def test_same_failure_produces_different_winners_under_cheapest_vs_reliable():
 
     assert cheapest_ranked[0].mode == "flight"
     assert reliable_ranked[0].mode == "rail"
+
+
+def test_cached_price_is_more_certain_than_a_dead_source_it_substitutes_for():
+    """A cached price is independent evidence: it was a real quote once.
+
+    _base_certainty used to take its base from the mode's LIVE status and
+    only then apply the stale penalty - so on the very leg where UseCached
+    matters (live source timed out, price on file from yesterday) the base
+    was Unknown's 0.0, the penalty clamped at 0.0, and a 26h-old real
+    quote scored exactly as certain as knowing nothing at all. It must
+    land strictly between an observed price and a genuine unknown.
+    """
+    flight_timeout = Observation(source="stub-flight", mode="flight", status=SourceStatus.TIMED_OUT)
+    coach_observation = Observation(
+        source="stub-coach",
+        mode="coach",
+        status=SourceStatus.FRESH,
+        price=Money(3886, "GBP"),
+        duration=timedelta(minutes=600),
+    )
+    leg_view = LegView(
+        origin="London",
+        destination="Berlin",
+        results=(
+            ("coach", Available(observations=(coach_observation,))),
+            ("flight", Unknown(observations=(flight_timeout,))),
+        ),
+        distance_km=930.0,
+    )
+    observed = Strategy(
+        kind=StrategyKind.COMMIT,
+        mode="coach",
+        source="stub-coach",
+        reason="commit to coach",
+        cost_low=Money(3886, "GBP"),
+        cost_high=Money(3886, "GBP"),
+        cost_basis="observed",
+    )
+    cached = Strategy(
+        kind=StrategyKind.USE_CACHED,
+        mode="flight",
+        reason="cached flight price is 26h old",
+        cost_low=Money(7140, "GBP"),
+        cost_high=Money(7883, "GBP"),
+        cost_basis="stale",
+        cache_age_hours=26.0,
+    )
+    genuine_unknown = Strategy(
+        kind=StrategyKind.WAIT,
+        mode="flight",
+        source="stub-flight",
+        reason="still pending",
+        wait_seconds=3.0,
+    )
+
+    ranked = score_strategies([observed, cached, genuine_unknown], leg_view, "cheapest")
+    by_kind = {s.kind: s for s in ranked}
+
+    observed_certainty = by_kind[StrategyKind.COMMIT].certainty
+    cached_certainty = by_kind[StrategyKind.USE_CACHED].certainty
+    unknown_certainty = by_kind[StrategyKind.WAIT].certainty
+
+    assert unknown_certainty < cached_certainty < observed_certainty

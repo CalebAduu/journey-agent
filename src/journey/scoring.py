@@ -23,6 +23,16 @@ PREFERENCE_WEIGHTS = {
 # certain the underlying LegStatus otherwise is.
 COST_BASIS_CERTAINTY_PENALTY = 0.2
 
+# UseCached does NOT inherit the live status of the mode it prices. A
+# cached fare is independent evidence - it was a real quote when it was
+# taken - and the situation where it's worth using is precisely the one
+# where the live source just died. Inheriting Unknown's 0.0 there made a
+# real 26h-old quote score exactly as certain as knowing nothing, which
+# is the timeout/empty conflation this project exists to avoid, wearing
+# a different hat. This base minus COST_BASIS_CERTAINTY_PENALTY puts a
+# cached price strictly between an observed quote and a true unknown.
+CACHED_BASE_CERTAINTY = 0.8
+
 # Weak symmetric Beta prior pseudo-counts, combined with this session's
 # observed (successes, failures) for a source to estimate p = P(responds
 # in time). With no observations yet, p = ALPHA / (ALPHA + BETA) = 0.5.
@@ -210,6 +220,8 @@ def _expected_minutes(strategy: Strategy, leg_view: LegView) -> float | None:
 def _base_certainty(strategy: Strategy, leg_view: LegView) -> float:
     if strategy.kind is StrategyKind.ABANDON_LEG:
         base = 1.0
+    elif strategy.kind is StrategyKind.USE_CACHED:
+        base = CACHED_BASE_CERTAINTY  # see the constant: never inherits the live status
     else:
         status = leg_view.by_mode(strategy.mode)
         base = leg_certainty(status) if status is not None else 1.0
