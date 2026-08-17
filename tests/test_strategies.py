@@ -29,11 +29,15 @@ class FakeRegistry:
 
 
 class FakeCache:
-    def __init__(self, entries: dict[str, tuple[Money, float]] | None = None):
+    """Keyed by (origin, destination, mode): a cached fare belongs to one
+    leg, not to a mode globally - the same mode on a different leg is a
+    different query with a different price."""
+
+    def __init__(self, entries: dict[tuple[str, str, str], tuple[Money, float]] | None = None):
         self.entries = entries or {}
 
-    def get(self, mode: str):
-        return self.entries.get(mode)
+    def get(self, origin: str, destination: str, mode: str):
+        return self.entries.get((origin, destination, mode))
 
 
 EMPTY_REGISTRY = FakeRegistry(pending_sources=set())
@@ -139,11 +143,50 @@ def test_cache_entry_older_than_max_age_yields_no_use_cached():
         destination="London",
         results=(("flight", Unknown(observations=(timed_out,))),),
     )
-    stale_cache = FakeCache({"flight": (Money(9000, "GBP"), 100.0)})  # > MAX_CACHE_AGE_HOURS (72)
-    fresh_cache = FakeCache({"flight": (Money(9000, "GBP"), 10.0)})
+    key = ("Sheffield", "London", "flight")
+    stale_cache = FakeCache({key: (Money(9000, "GBP"), 100.0)})  # > MAX_CACHE_AGE_HOURS (72)
+    fresh_cache = FakeCache({key: (Money(9000, "GBP"), 10.0)})
 
     stale_strategies = generate(leg_view, EMPTY_REGISTRY, budget=300.0, cache=stale_cache)
     fresh_strategies = generate(leg_view, EMPTY_REGISTRY, budget=300.0, cache=fresh_cache)
 
     assert not any(s.kind is StrategyKind.USE_CACHED for s in stale_strategies)
     assert any(s.kind is StrategyKind.USE_CACHED for s in fresh_strategies)
+
+
+def test_cached_fare_only_applies_to_its_own_leg():
+    """A cached London->Berlin flight price must not surface as a
+    UseCached option on Sheffield->London - it's a different query."""
+    timed_out = Observation(source="stub-flight", mode="flight", status=SourceStatus.TIMED_OUT)
+    other_leg = LegView(
+        origin="Sheffield",
+        destination="London",
+        results=(("flight", Unknown(observations=(timed_out,))),),
+    )
+    cache = FakeCache({("London", "Berlin", "flight"): (Money(7140, "GBP"), 26.0)})
+
+    strategies = generate(other_leg, EMPTY_REGISTRY, budget=300.0, cache=cache)
+
+    assert not any(s.kind is StrategyKind.USE_CACHED for s in strategies)
+
+
+def test_use_cached_carries_its_age_and_asymmetric_drift_interval():
+    """The row has to show how old the price is and which way it can
+    move, so the age travels on the Strategy rather than being parsed
+    back out of the reason string."""
+    timed_out = Observation(source="stub-flight", mode="flight", status=SourceStatus.TIMED_OUT)
+    leg_view = LegView(
+        origin="London",
+        destination="Berlin",
+        results=(("flight", Unknown(observations=(timed_out,))),),
+    )
+    cache = FakeCache({("London", "Berlin", "flight"): (Money(7140, "GBP"), 26.0)})
+
+    strategies = generate(leg_view, EMPTY_REGISTRY, budget=300.0, cache=cache)
+
+    cached = next(s for s in strategies if s.kind is StrategyKind.USE_CACHED)
+    assert cached.cache_age_hours == 26.0
+    # cached price is the floor, drift gives the ceiling - fares ratchet up
+    assert cached.cost_low == Money(7140, "GBP")
+    assert cached.cost_high.minor_units > cached.cost_low.minor_units
+    assert cached.cost_basis == "stale"

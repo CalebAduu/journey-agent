@@ -136,6 +136,9 @@ class Strategy:
     cost_basis: str | None = None  # "observed" | "inferred" | "stale"
     wait_seconds: float | None = None
     source: str | None = None
+    # UseCached only: how old the cached price is, kept for display so the
+    # CLI doesn't have to parse it back out of the reason string.
+    cache_age_hours: float | None = None
     # Phase 6 (scoring.py): the scored components, kept on the Strategy so
     # they can be printed alongside the total, not just used internally.
     certainty: float | None = None

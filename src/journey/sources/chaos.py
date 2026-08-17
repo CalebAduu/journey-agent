@@ -9,7 +9,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from journey.domain import Leg
+from journey.domain import Leg, Money
 
 
 class ChaosDirective:
@@ -70,13 +70,38 @@ def parse_directive(text: str) -> ChaosDirective:
     return directive_cls()
 
 
+def leg_key(origin: str, destination: str) -> str:
+    """The `leg:` field in a scenario's `cached:` block, e.g.
+    London/Berlin -> "london_berlin"."""
+    return f"{origin}_{destination}".lower().replace(" ", "_")
+
+
+@dataclass(frozen=True)
+class CachedFare:
+    """A price stored by an earlier query, replayed into a scenario so
+    UseCached is reachable. Without this nothing ever seeds the cache,
+    so the strategy could be generated but never actually demonstrated."""
+
+    source: str
+    mode: str
+    price: Money
+    age_hours: float
+
+
 @dataclass(frozen=True)
 class ChaosScenario:
     name: str
     directives: Mapping[tuple[str, str, str], ChaosDirective] = field(default_factory=dict)
+    # Keyed (leg_key, mode) - a cached fare belongs to the leg it was
+    # queried for, never to a mode globally.
+    cached: Mapping[tuple[str, str], CachedFare] = field(default_factory=dict)
 
     def directive_for(self, source_name: str, leg: Leg) -> ChaosDirective:
         return self.directives.get((source_name, leg.origin, leg.destination), Ok())
+
+    def cached_for(self, origin: str, destination: str, mode: str) -> tuple[Money, float] | None:
+        entry = self.cached.get((leg_key(origin, destination), mode))
+        return None if entry is None else (entry.price, entry.age_hours)
 
 
 def load_scenario(path) -> ChaosScenario:
@@ -89,4 +114,13 @@ def load_scenario(path) -> ChaosScenario:
         (entry["source"], entry["origin"], entry["destination"]): parse_directive(entry["directive"])
         for entry in data.get("directives", [])
     }
-    return ChaosScenario(name=data["name"], directives=directives)
+    cached = {
+        (entry["leg"], entry["mode"]): CachedFare(
+            source=entry["source"],
+            mode=entry["mode"],
+            price=Money(int(entry["price_minor"]), entry.get("currency", "GBP")),
+            age_hours=float(entry["age_hours"]),
+        )
+        for entry in data.get("cached") or []
+    }
+    return ChaosScenario(name=data["name"], directives=directives, cached=cached)

@@ -84,9 +84,17 @@ class SystemClock:
         await asyncio.sleep(seconds)
 
 
-class EmptyCacheLookup:
-    def get(self, mode: str):
-        return None
+class ScenarioCache:
+    """Replays a scenario's `cached:` block as the fare cache, so the
+    UseCached strategy is reachable in a real run. Without this nothing
+    ever seeds the cache and the strategy, though generated, could never
+    actually fire."""
+
+    def __init__(self, scenario: ChaosScenario):
+        self.scenario = scenario
+
+    def get(self, origin: str, destination: str, mode: str):
+        return self.scenario.cached_for(origin, destination, mode)
 
 
 def _build_sources(scenario_name: str, scenario: ChaosScenario, seed: int, clock) -> list[StubSource]:
@@ -157,7 +165,13 @@ def _cost_cell(strategy: Strategy, distance_km: float | None) -> str:
         return f"— {score}".strip()
 
     value = _fmt_money_range(strategy.cost_low, strategy.cost_high)
-    basis = f" [dim]{strategy.cost_basis}[/dim]" if strategy.cost_basis in ("inferred", "stale") else ""
+    if strategy.cost_basis == "stale":
+        # Asymmetric by design: the cached price is the floor and the
+        # drifted value the ceiling, because fares ratchet up toward
+        # departure rather than moving symmetrically either way.
+        age = f"{strategy.cache_age_hours:.0f}h " if strategy.cache_age_hours is not None else ""
+        return f"{value} {score} [dim]{age}stale[/dim]".strip()
+    basis = f" [dim]{strategy.cost_basis}[/dim]" if strategy.cost_basis == "inferred" else ""
     return f"{value} {score}{basis}".strip()
 
 
@@ -269,7 +283,12 @@ def _print_strategies(console: Console, decision) -> None:
 
     for i, s in enumerate(decision.ranked_strategies):
         label = f"[bold green]{i + 1}*[/bold green]" if i == 0 else str(i + 1)
-        kind_label = f"wait {s.wait_seconds:.0f}s" if s.kind is StrategyKind.WAIT and s.wait_seconds is not None else s.kind.value
+        if s.kind is StrategyKind.WAIT and s.wait_seconds is not None:
+            kind_label = f"wait {s.wait_seconds:.0f}s"
+        elif s.kind is StrategyKind.USE_CACHED:
+            kind_label = "cached"
+        else:
+            kind_label = s.kind.value
         total = f"{s.total_score:.4f}" if s.total_score is not None else "—"
         voi = "—"
         reason = s.reason
@@ -278,9 +297,16 @@ def _print_strategies(console: Console, decision) -> None:
             # product out - showing it next to q=0.00 reads as broken
             # arithmetic rather than "this branch never looks at it."
             delta = "—" if s.voi_q == 0.0 else f"{s.voi_delta:.3f}"
-            voi = f"{s.voi_value:.4f}\np={s.voi_p:.2f} q={s.voi_q:.2f} d={delta}"
+            voi = f"{s.voi_value:.4f}"
             if s.voi_value == 0.0:
                 reason = "cannot beat current best at any plausible price"
+            # The p/q/delta breakdown lives on the reason line, not in the
+            # column: it's needed for only the Wait rows and is far wider
+            # than the value itself, so as a column it squeezes every
+            # other row's real numbers into wrapping.
+            # Escaped: Rich reads a bare [...] as a style tag and would
+            # silently swallow the whole breakdown.
+            reason += f"  \\[p={s.voi_p:.2f} q={s.voi_q:.2f} delta={delta}]"
         reasons.append(f"{i + 1}. {reason}")
         table.add_row(
             label,
@@ -311,7 +337,7 @@ async def _run(args: argparse.Namespace) -> None:
         preference=args.preference,
         budget_seconds=DEMO_BUDGET_SECONDS,
         feasibility=RouteFeasibility(),
-        cache=EmptyCacheLookup(),
+        cache=ScenarioCache(scenario),
         harvest_timeout_seconds=HARVEST_TIMEOUT_SECONDS,
     )
 

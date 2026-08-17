@@ -118,7 +118,7 @@ Respond with the narration only, no preamble."""
 class _EmptyCache:
     """Placeholder until a real fare cache exists: never has anything cached."""
 
-    def get(self, mode):
+    def get(self, origin, destination, mode):
         return None
 
 

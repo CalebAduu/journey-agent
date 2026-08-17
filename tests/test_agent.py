@@ -37,7 +37,7 @@ class AllFeasible:
 
 
 class EmptyCache:
-    def get(self, mode):
+    def get(self, origin, destination, mode):
         return None
 
 

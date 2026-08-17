@@ -8,3 +8,16 @@ directives:
     origin: London
     destination: Berlin
     directive: "timeout(3)"
+
+# A flight price stored by an earlier query, on the same leg where the
+# live flight source now times out - the realistic UseCached case: the
+# source is unreachable and there's a price on file from yesterday.
+# 26h is inside MAX_CACHE_AGE_HOURS (72), so it's still offered;
+# drift_cached() turns it into an asymmetric £71.40-£78.83 interval
+# (cached price as floor, drift as ceiling - fares ratchet upward).
+cached:
+  - leg: london_berlin
+    source: stub-flight
+    mode: flight
+    price_minor: 7140
+    age_hours: 26

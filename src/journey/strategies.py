@@ -29,8 +29,13 @@ _FAILED_STATUSES = (SourceStatus.TIMED_OUT, SourceStatus.ERROR)
 
 
 class CacheLookup(Protocol):
-    def get(self, mode: str) -> tuple[Money, float] | None:
-        """(cached_price, age_hours) for this mode, or None if nothing cached."""
+    def get(self, origin: str, destination: str, mode: str) -> tuple[Money, float] | None:
+        """(cached_price, age_hours) for this mode on this leg, or None.
+
+        Keyed by leg as well as mode: a cached London->Berlin flight
+        price says nothing about flights on any other leg, so a
+        mode-only key would leak one leg's fare onto every other.
+        """
         ...
 
 
@@ -44,7 +49,7 @@ def generate(leg_view: LegView, registry: PendingRegistry, budget: float, cache:
             strategies.extend(_wait_strategies(mode, status, registry, budget))
             strategies.extend(_replan_strategies(mode, status, leg_view))
 
-        strategies.extend(_use_cached_strategy(mode, cache))
+        strategies.extend(_use_cached_strategy(mode, cache, leg_view))
 
     if leg_view.abandonable:
         strategies.append(
@@ -134,8 +139,8 @@ def _replan_strategies(mode: str, status: Unknown, leg_view: LegView) -> list[St
     return strategies
 
 
-def _use_cached_strategy(mode: str, cache: CacheLookup) -> list[Strategy]:
-    entry = cache.get(mode)
+def _use_cached_strategy(mode: str, cache: CacheLookup, leg_view: LegView) -> list[Strategy]:
+    entry = cache.get(leg_view.origin, leg_view.destination, mode)
     if entry is None:
         return []
     price, age_hours = entry
@@ -149,6 +154,7 @@ def _use_cached_strategy(mode: str, cache: CacheLookup) -> list[Strategy]:
             cost_low=low,
             cost_high=high,
             cost_basis="stale",
+            cache_age_hours=age_hours,
             reason=f"cached {mode} price is {age_hours:.0f}h old",
         )
     ]
