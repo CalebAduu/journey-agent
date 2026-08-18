@@ -1,7 +1,4 @@
-"""Phase 8: parse_intent() strict validation, narrate()'s templated
-fallback, and LLM response caching.
-
-SPEC.md Phase 8 done-when: identical run behaviour with and without
+"""identical run behaviour with and without
 --no-llm. "LLM returns JSON only; validate strictly" + "fall back to
 defaults on any validation failure" drive tests 1-3.
 """
