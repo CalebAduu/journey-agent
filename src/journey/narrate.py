@@ -230,13 +230,7 @@ class Narrator:
 
 
 def _is_narration_consistent(decision_trace: DecisionTrace, narration: str) -> bool:
-    """A deterministic backstop, not another prompt tweak. Two failure
-    modes verified live that repeated prompt rewrites reduced but never
-    fully eliminated: describing an accepted Wait as "committed" to the
-    pending mode, and freelancing a cost/speed comparison against a mode
-    outside the top-2 when no comparison fact was given to support one
-    (e.g. the runner-up is AbandonLeg, which has no price or duration).
-    Both are the same lesson relocated into prose - don't trust the
+    """A deterministic backstop, not another prompt tweak.  don't trust the
     probabilistic layer to self-police a distinction that matters;
     verify it, and fall back if it's wrong."""
     choice = decision_trace.choice
@@ -301,15 +295,10 @@ def _summarize_trace_for_prompt(decision_trace: DecisionTrace) -> str:
     "why this over the alternative" is the whole point of the narration.
 
     Empty, Conflicted, and NotApplicable are spelled out as their own
-    labelled sections, same as Unknown already was - observed live: when
+    labelled sections, same as Unknown already was -  when
     a mode's real status was only visible as a bare enum value buried
     inside the raw source list, the LLM invented a reason to fill the gap
-    instead of reporting the real one (a clean-looking single price with
-    no mention that a second source disagreed; a NOT_APPLICABLE mode's
-    incidental stub price used as if it were a live comparison point -
-    stub sources are queried unconditionally on every leg, so that
-    observation genuinely exists even though feasibility ruled it out
-    before price ever mattered)."""
+    instead of reporting the real one ."""
     leg = decision_trace.leg
     not_applicable = {
         mode: status for mode, status in decision_trace.leg_view.results if isinstance(status, NotApplicable)
@@ -384,10 +373,7 @@ def _mode_was_resolved(choice: Strategy, mode: str) -> bool:
     stale by the time of the final choice - either the agent waited and
     committed to this very mode once it resolved favorably, or the wait
     resolved it as genuinely failed and the agent replanned onto a
-    different mode instead (both: act() actually waited for real and
-    re-scored - see agent.py's act()). Every reason string strategies.py
-    generates names the mode(s) it's about (commit/use_cached name their
-    own mode, replan names the one that failed), so this is a reliable,
+    different mode instead so this is a reliable,
     general check without agent.py needing to record which branch fired."""
     return choice.kind is not StrategyKind.WAIT and mode in choice.reason
 
@@ -404,13 +390,7 @@ def _describe_conflict(status: Conflicted) -> str:
     return f"{', '.join(parts)} across {sources}"
 
 
-def _describe_relative_comparison(first: Strategy, second: Strategy) -> str | None:
-    """Computed once, in Python, so the LLM never has to judge which of
-    two numbers is bigger - observed live: it isn't reliable at this,
-    calling the same 600-minute option "acceptably fast" in one sample
-    and "acceptably slow" in another, compared to the same 480-minute
-    runner-up. Same fix as the earlier invented-arithmetic bug: don't
-    ask it to judge, hand over the answer as a fact."""
+def _describe_relative_comparison(first: Strategy, second: Strategy) -> str | 
     parts = []
     if first.cost_low is not None and second.cost_low is not None:
         if first.cost_low.minor_units < second.cost_low.minor_units:
@@ -452,8 +432,7 @@ def _template_narrate(decision_trace: DecisionTrace) -> str:
     choice = decision_trace.choice
     # unknown_reasons is frozen before act() runs, but choice reflects
     # whatever act() decided after - including a full re-score once a
-    # waited-on source resolves, whether that resolves favorably (commit
-    # to the same mode) or as a genuine failure (replan onto another).
+    # waited-on source resolves, 
     # Without this filter, a leg like that would call its own resolved
     # mode "unknown so far" one clause before committing to or replanning
     # around it.
