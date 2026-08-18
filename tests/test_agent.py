@@ -1,9 +1,4 @@
 """Phase 7: the agent loop.
-
-SPEC.md §9 Phase 7 done-when: full 3-leg run with a failure completes
-and prints a coherent trace. §8's global-budget demo moment: the same
-failure ranks Wait first at leg 2 and Commit first at leg 3, because
-waiting gets more expensive as the remaining budget shrinks.
 """
 
 import asyncio
