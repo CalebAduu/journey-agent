@@ -1,9 +1,7 @@
-"""Phase 2b: parse_transitous() tested against a real saved response.
+""" parse_transitous() tested against a real saved response.
 
 fixtures/transitous_journeys.json is a genuine api.transitous.org/api/v1/plan
-response for Sheffield -> London (route leg 1), captured live. No assumed
-shapes - see sources/transitous.py's module docstring for what was
-confirmed before writing the parser.
+response for Sheffield -> London (route leg 1), captured live
 """
 
 import json
