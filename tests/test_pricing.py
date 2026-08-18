@@ -70,5 +70,5 @@ def test_drift_cached_ceiling_matches_the_stated_rate():
     _low, high = drift_cached(price, age_hours=24)
 
     assert high == Money(round(10000 * (1 + STALENESS_DRIFT_PER_HOUR * 24)))
-    # ~10% over 24h, per the module docstring
+   
     assert high.minor_units == pytest.approx(11000, rel=0.01)
