@@ -1,12 +1,9 @@
 """Phase 3: async harvest against a deadline, never cancelling what's
 still running.
 
-SPEC.md §9 Phase 3 done-when: a test with one instant + one slow source
+ a test with one instant + one slow source
 returns at the deadline with one FRESH and one TIMED_OUT, and the slow
-task is still pending, not cancelled. Durations here are scaled down
-from the spec's illustrative 2s/10s so the suite stays fast - the
-mechanism under test (asyncio.wait leaving pending tasks alone) doesn't
-care about the actual numbers.
+task is still pending, not cancelled.
 """
 
 import asyncio
