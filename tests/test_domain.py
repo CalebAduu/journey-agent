@@ -1,9 +1,4 @@
 """Phase 1 thesis test.
-
-SPEC.md §9 Phase 1, done-when: "a test asserts that a LegView built from a
-timeout is not equal to and not substitutable for one built from an
-empty-but-successful response. Write this test first — it is the thesis
-statement of the project."
 """
 
 
