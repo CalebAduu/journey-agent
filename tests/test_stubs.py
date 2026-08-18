@@ -1,4 +1,4 @@
-"""Phase 2a: StubSource behaviour under each chaos directive.
+""" StubSource behaviour under each chaos directive.
 
 Critical constraints under test: fetch() must never raise regardless of
 what goes wrong, and sources must use the injected clock/rng rather than
