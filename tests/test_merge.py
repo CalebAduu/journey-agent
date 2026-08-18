@@ -1,6 +1,4 @@
-"""Phase 4: merge() and certainty().
-
-SPEC.md §9 Phase 4 done-when: £100 and £180 for the same leg yields
+"""
 CONFLICTED carrying both, not one; NOT_APPLICABLE legs do not reduce the
 certainty score. Critical: only Unknown reduces certainty - Empty and
 NotApplicable are both full certainty.
