@@ -38,7 +38,7 @@ def test_leg_view_from_timeout_is_not_substitutable_for_leg_view_from_empty():
 
 
 def test_not_applicable_is_not_substitutable_for_unknown_or_empty():
-    """§4: not calling because a mode is impossible (NOT_APPLICABLE) must
+    """ not calling because a mode is impossible (NOT_APPLICABLE) must
     stay distinct from calling and getting nothing back (UNKNOWN/EMPTY),
     even though none of the three carry a price."""
     not_applicable = NotApplicable(reason="no direct passenger service")
@@ -52,7 +52,7 @@ def test_not_applicable_is_not_substitutable_for_unknown_or_empty():
 
 
 def test_conflicted_carries_both_values_not_one():
-    """§4/Phase 4: two sources that disagree must keep both values as an
+    """ two sources that disagree must keep both values as an
     interval, never collapse to a single winner."""
     conflicted = Conflicted(
         dimension="price",
@@ -69,7 +69,7 @@ def test_conflicted_carries_both_values_not_one():
 
 
 def test_observation_carries_price_duration_and_provenance():
-    """Phase 2a: a stub source's successful answer needs to report a price,
+    """ a stub source's successful answer needs to report a price,
     a duration, when it was observed, and (on failure) why."""
     observed_at = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
 
