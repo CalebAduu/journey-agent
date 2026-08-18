@@ -1,6 +1,6 @@
-"""Phase 5: strategy generation filters.
+""" strategy generation filters.
 
-SPEC.md §8: Wait only if genuinely pending; UseCached only if fresh
+Wait only if genuinely pending; UseCached only if fresh
 enough; Replan only via an independent healthy alternative; AbandonLeg
 only if the journey survives without the leg; Commit for any actionable
 observation, never treating a missing price as zero.
