@@ -1,11 +1,4 @@
-"""Phase 6: scoring and VOI.
-
-SPEC.md §9 Phase 6 done-when, the two tests the video points at:
-(a) pending source cannot beat current best even at best case -> Wait
-    ranks last, VOI = 0.
-(b) it plausibly can -> Wait ranks above Commit.
-Plus §8's demo moment: same failure, different winner under cheapest vs
-reliable.
+""" scoring and VOI.
 """
 
 from datetime import timedelta
