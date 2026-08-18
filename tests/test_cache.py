@@ -1,4 +1,4 @@
-"""Phase 2c: ResponseCache record/replay, and the claim that stripping
+""" ResponseCache record/replay, and the claim that stripping
 never removes anything the parser actually reads.
 """
 
