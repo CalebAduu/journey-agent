@@ -1,4 +1,4 @@
-"""Phase 7: the agent loop.
+"""the agent loop.
 """
 
 import asyncio
