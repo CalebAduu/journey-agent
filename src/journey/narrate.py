@@ -10,8 +10,7 @@ so the LLM cannot influence ranking, VOI, or conflict resolution no
 matter what it produces. It narrates what already happened; it never
 decides anything.
 
-All LLM responses are cached to disk keyed on a hash of the prompt, so
-a recorded demo run never depends on the network after the first pass.
+
 """
 
 import hashlib
