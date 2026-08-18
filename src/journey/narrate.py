@@ -389,7 +389,7 @@ def _describe_conflict(status: Conflicted) -> str:
     return f"{', '.join(parts)} across {sources}"
 
 
-def _describe_relative_comparison(first: Strategy, second: Strategy) -> str | 
+def _describe_relative_comparison(first: Strategy, second: Strategy) -> str | None:
     parts = []
     if first.cost_low is not None and second.cost_low is not None:
         if first.cost_low.minor_units < second.cost_low.minor_units:
