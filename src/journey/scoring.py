@@ -1,6 +1,6 @@
 """Scoring: weight each Strategy's cost/time/certainty against a
 preference, and voi() for deciding whether a pending Wait is worth its
-cost. The two VOI tests here are the ones the video points at.
+cost. 
 
 All priors are hand-specified, not measured - see README.
 """
@@ -26,16 +26,12 @@ COST_BASIS_CERTAINTY_PENALTY = 0.2
 # UseCached does NOT inherit the live status of the mode it prices. A
 # cached fare is independent evidence - it was a real quote when it was
 # taken - and the situation where it's worth using is precisely the one
-# where the live source just died. Inheriting Unknown's 0.0 there made a
-# real 26h-old quote score exactly as certain as knowing nothing, which
-# is the timeout/empty conflation this project exists to avoid, wearing
-# a different hat. This base minus COST_BASIS_CERTAINTY_PENALTY puts a
-# cached price strictly between an observed quote and a true unknown.
+# where the live source just died. 
 CACHED_BASE_CERTAINTY = 0.8
 
 # Weak symmetric Beta prior pseudo-counts, combined with this session's
 # observed (successes, failures) for a source to estimate p = P(responds
-# in time). With no observations yet, p = ALPHA / (ALPHA + BETA) = 0.5.
+# in time). With no observations yet, p = 0.5.
 BETA_PRIOR_ALPHA = 2.0
 BETA_PRIOR_BETA = 2.0
 
@@ -116,7 +112,7 @@ def _voi_components(
     strategy: Strategy, current_best: Strategy, source_reliability: tuple[int, int]
 ) -> tuple[float, float, float]:
     """p, q, delta - shared by voi() and score_strategies(), which also
-    stores them on the Strategy for display (Phase 9 CLI)."""
+    stores them on the Strategy for display """
     best, worst = strategy.best_case_score, strategy.worst_case_score
     incumbent = current_best.total_score
 
@@ -183,7 +179,7 @@ def _score_batch(strategies: list[Strategy], leg_view: LegView, weights: tuple[f
 def _hypothetical_total(raw_cost: dict, raw_minutes: dict, raw_certainty: dict, price, weights) -> float:
     """Score one hypothetical outcome (a resolved price, zero further
     delay, full certainty) against the real candidates already scored in
-    this batch, without mutating or being seen by any other hypothetical."""
+    this batch, without being seen by any other hypothetical."""
     cost_weight, time_weight, certainty_weight = weights
     cost_batch = {**{k: (-v if v is not None else None) for k, v in raw_cost.items()}, "_hyp": -price.minor_units}
     minutes_batch = {**{k: (-v if v is not None else None) for k, v in raw_minutes.items()}, "_hyp": -0.0}
